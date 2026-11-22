@@ -1,0 +1,6 @@
+
+# AI assistant artifacts
+context-snapshot.json
+.env
+node_modules
+.superpowers

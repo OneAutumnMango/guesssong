@@ -1,0 +1,60 @@
+# Spotify Guessing Game: Spec
+
+A web game for me and my friends (not for the app store). PC and mobile browsers. One device per player.
+
+## Gameplay
+
+1. Everyone logs in with their own Spotify account and joins the host's room (join code).
+2. Host picks settings (below) and starts.
+3. The app picks random songs from each player's chosen source and shuffles them into one game.
+4. Per round, the host plays the song in an embedded Spotify player. Everyone guesses **whose song it is**.
+5. The round ends when the 20s timer runs out or everyone has guessed. The app then reveals the owner and shows the scoreboard.
+6. Scoring is Kahoot-style: a correct guess earns 1000 points scaled down linearly by response time (min 500 at the deadline). A wrong guess or no guess earns 0.
+7. After the last song, the final scoreboard is shown.
+
+## Host settings
+
+- Song source: recents or liked songs (applies to all players).
+- Number of songs (default 12), split equally across players (rounded down).
+- Song buffer: how many of their own picked songs each player may remove before the game starts. Removed songs are not replaced, so the game has fewer songs (e.g. 12 picked, 2 removed = 10 played).
+- Host also plays: toggle (default on). If off, the host only controls the game and does not guess or contribute songs.
+
+## Roles and devices
+
+- Max 8 players per room.
+- Host can be PC or mobile.
+- Playback uses Spotify's iFrame Embed API in the host's browser. It plays the full track if the host's browser is logged into Spotify, otherwise a 30s preview. No Premium is required. Mobile browsers block autoplay, so the host taps Play each round (this also acts as "start the 20s timer").
+
+## Architecture
+
+- One Node server serving the web app plus a WebSocket channel. Game state is held in memory (per room). No database.
+- Spotify login: Authorization Code with PKCE. The server fetches the player's song pool once (on source selection) and then discards the token. Only track id, title, artist and owner are kept.
+- Fetching: recents returns at most 50 tracks. Liked songs are paged, and a random sample is taken. Duplicate tracks are removed, and the picks are capped to what a player actually has.
+- The server is the authority on timing and scoring. It records each guess's arrival time and ignores guesses after the deadline. Clients only render.
+- Hosting: runs as a Docker container and is exposed over HTTPS with a Cloudflare Tunnel (`https://guesssong.mang0.uk`, redirect URI `https://guesssong.mang0.uk/callback`). Config comes from env vars (`SPOTIFY_CLIENT_ID`, `PUBLIC_URL`, `PORT` default 3000), never baked into the image.
+- Release: pushing a git tag (`v*`) builds the image and pushes it to GitHub Container Registry (`ghcr.io/<owner>/guesssong`) through GitHub Actions.
+
+## Constraints
+
+- Low RAM use (WSL crashes if it fills): in-memory state only, no heavy dependencies, and rooms are deleted on game end.
+- The Spotify app stays in development mode. Spotify allows only 25 users, and each friend must be added to the user allowlist in the Spotify developer dashboard by hand (their Spotify account email).
+
+## Non-goals
+
+- App store release, accounts or persistence, game history.
+- Playback on non-host devices, Spotify Connect control, or the Web Playback SDK.
+- Surviving a server restart (a restart ends the game).
+- Reconnection handling beyond rejoining the same room with the same code.
+- Cheating prevention beyond the server-side timing.
+
+## Failure modes considered
+
+- **Host's browser not logged into Spotify:** the embed falls back to a 30s preview. This is fine because the round lasts 20s. Minor.
+- **A friend isn't on the allowlist:** their login fails. Setup step, documented above. Minor.
+- **A player has too few songs:** the game uses what they have and equal-split is reduced to the smallest pool. Minor.
+- **PC off or tunnel down:** no game. Accepted.
+
+## Testing
+
+- Unit tests for scoring, the song split and sampling, and the round state machine.
+- A manual end-to-end test with two browsers (one PC, one phone) against the real Spotify login.
