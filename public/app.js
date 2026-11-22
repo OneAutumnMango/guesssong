@@ -1,5 +1,6 @@
 (function () {
   'use strict';
+  const STREAK_MIN = 2;
   const $ = (id) => document.getElementById(id);
   const app = $('app');
 
@@ -25,7 +26,7 @@
       if (k === 'class') n.className = v;
       else if (k === 'text') n.textContent = v;
       else if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
-      else if (k.startsWith('data-')) n.setAttribute(k, v);
+      else if (k.startsWith('data-') || k.startsWith('aria-')) n.setAttribute(k, v);
       else n[k] = v;
     }
     for (const c of kids) if (c) n.append(c);
@@ -89,7 +90,7 @@
   // --- host audio: the Spotify embed stays rendered but off-screen; the app's own UI drives it
   let controller = null, apiFailed = false, loadedUri = null, pendingUri = null;
   let playClicked = false, playSent = false, fallback = false, watchTimer = null, embedPhase = null;
-  let audioStarted = false, audioPos = 0, audioDur = 0;
+  let audioStarted = false, audioPos = 0, audioDur = 0, seeking = false;
   function setEmbedVisible(v) {
     const w = $('embed-wrap');
     w.className = v ? 'embed-visible' : 'embed-hidden';
@@ -103,6 +104,10 @@
     if (pr) { pr.max = audioDur || 1; pr.value = Math.min(audioPos, audioDur || 1); }
     const st = $('audio-status');
     if (st) st.textContent = audioStarted ? 'Playing' : 'Waiting for audio…';
+    const tg = $('audio-toggle');
+    if (tg) tg.textContent = audioStarted ? 'Pause' : 'Resume';
+    const sk = $('audio-seek');
+    if (sk && !seeking) { sk.max = Math.max(1, Math.floor(audioDur / 1000)); sk.value = Math.floor(audioPos / 1000); }
     if (!view || view.you !== view.hostId) return;
     // the round starts when sound starts: either our Play click or the embed's own button (fallback)
     if (audioStarted && view.phase === 'between' && !playSent && (playClicked || fallback)) {
@@ -126,6 +131,7 @@
           controller = c; loadedUri = created;
           c.addListener('playback_update', onPlayback);
           if (pendingUri && pendingUri !== created) { c.loadUri(pendingUri); loadedUri = pendingUri; }
+          if (view) render();
         });
     };
     const s = document.createElement('script');
@@ -146,7 +152,7 @@
     if (view.phase === 'finished' && controller && controller.pause) controller.pause();
     if (!embedStarted) { embedStarted = true; pendingUri = view.nextUri || null; loadEmbedScript(); }
     const show = fallback && view.phase === 'between' && !apiFailed;
-    setEmbedVisible(show);
+    setEmbedVisible(show || (view.phase === 'reveal' && !apiFailed));
     const note = $('embed-note');
     note.hidden = !(apiFailed || show);
     note.textContent = apiFailed
@@ -165,12 +171,39 @@
   const tag = (p) => p.name + (p.bot ? ' (test)' : '');
   const nameOf = (id) => { const p = view.players.find((x) => x.id === id); return p ? tag(p) : '?'; };
 
+  function streakEl(p) {
+    if (!(p.streak >= STREAK_MIN)) return null;
+    return el('span', { class: 'streak' }, el('span', { 'aria-hidden': 'true', text: '🔥 ' + p.streak }),
+      el('span', { class: 'sr-only', text: p.streak + ' in a row' }));
+  }
+  const nameSpan = (p, extra) => el('span', { class: 'grow' }, tag(p) + extra, streakEl(p));
+
+  // one iframe node per track id, reused so a playing song is never reloaded
+  const frames = new Map();
+  function spotifyFrame(id, title) {
+    if (typeof id !== 'string' || !/^[A-Za-z0-9]{22}$/.test(id)) return null;
+    let f = frames.get(id);
+    if (!f) {
+      f = el('iframe', { title, height: 80, loading: 'lazy', frameBorder: '0',
+        allow: 'autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture' });
+      f.style.width = '100%';
+      f.src = 'https://open.spotify.com/embed/track/' + id + '?utm_source=generator';
+      frames.set(id, f);
+    }
+    return f;
+  }
+
+  function refreshScoreboard() {
+    const old = $('scoreboard');
+    if (old) old.replaceChildren(...scoreboard().childNodes);
+  }
+
   function scoreboard() {
     const sorted = [...view.players].sort((a, b) => b.score - a.score);
     const d = (view.reveal && view.reveal.deltas) || {};
-    return el('section', { class: 'side' }, el('h2', { text: 'Scoreboard' }),
+    return el('section', { id: 'scoreboard', class: 'side' }, el('h2', { text: 'Scoreboard' }),
       el('ul', {}, ...sorted.map((p) => el('li', {},
-        el('span', { class: 'grow', text: tag(p) + (p.id === view.you ? ' (you)' : '') }),
+        nameSpan(p, p.id === view.you ? ' (you)' : ''),
         el('span', { text: String(p.score) + (view.phase === 'reveal' && d[p.id] ? ' (+' + d[p.id] + ')' : '') })))));
   }
 
@@ -203,9 +236,11 @@
     return [el('h2', { text: 'Room' }),
       el('p', { class: 'big', text: view.code || '' }),
       el('ul', {}, ...view.players.map((p) => el('li', {},
-        el('span', { class: 'grow', text: tag(p) + (p.id === view.hostId ? ' (host)' : '') + (p.id === view.you ? ' (you)' : '') }),
+        nameSpan(p, (p.id === view.hostId ? ' (host)' : '') + (p.id === view.you ? ' (you)' : '')),
         el('span', { class: 'muted', text: p.connected ? '' : 'offline' }))))];
   }
+
+  const bufMax = (p) => (Number.isInteger(p) && p >= 1 ? Math.min(20, p - 1) : 20);
 
   function lobby() {
     const out = [];
@@ -225,21 +260,25 @@
       const s = view.settings;
       const source = el('select', { id: 'f-source' }, el('option', { value: 'recents', text: 'Recently played' }), el('option', { value: 'liked', text: 'Liked songs' }));
       source.value = s.source;
-      const total = el('input', { id: 'f-total', type: 'number', min: 1, max: 100, step: 1, required: true, value: s.total });
-      const buffer = el('input', { id: 'f-buffer', type: 'number', min: 0, max: 20, step: 1, required: true, value: s.buffer });
+      const per = el('input', { id: 'f-per', type: 'number', min: 1, max: 25, step: 1, required: true, value: s.perPerson });
+      const buffer = el('input', { id: 'f-buffer', type: 'number', min: 0, max: bufMax(s.perPerson), step: 1, required: true, value: s.buffer });
+      const fixMax = () => { buffer.max = bufMax(Number(per.value)); };
+      per.addEventListener('input', fixMax);
       const hp = el('input', { id: 'f-hp', type: 'checkbox', checked: s.hostPlays });
       const push = () => {
-        if (!total.checkValidity() || !buffer.checkValidity()) { showError('Songs must be 1-100, removals 0-20'); return false; }
+        fixMax();
+        if (!per.checkValidity() || !buffer.checkValidity()) { showError('Songs per person 1-25, removals 0 to songs-1'); return false; }
         showError('');
         send({ type: 'settings', settings: {
-          source: source.value, total: Number(total.value), buffer: Number(buffer.value), hostPlays: hp.checked } });
+          source: source.value, perPerson: Number(per.value), buffer: Number(buffer.value), hostPlays: hp.checked } });
         return true;
       };
-      for (const i of [source, total, buffer, hp]) i.addEventListener('change', push);
+      for (const i of [source, per, buffer, hp]) i.addEventListener('change', push);
       out.push(el('section', { id: 'lobby-settings' }, el('h2', { text: 'Settings' }),
         el('label', { htmlFor: 'f-source', text: 'Song source' }), source,
-        el('label', { htmlFor: 'f-total', text: 'Total songs (1-100)' }), total,
-        el('label', { htmlFor: 'f-buffer', text: 'Removals per player (0-20)' }), buffer,
+        el('label', { htmlFor: 'f-per', text: 'Songs per person' }), per,
+        el('label', { htmlFor: 'f-buffer', text: 'Removals each' }), buffer,
+        el('p', { class: 'muted', text: 'Everyone ends up with (songs per person - removals) songs in the game; if you do not remove enough, random ones are dropped.' }),
         el('label', { htmlFor: 'f-hp' }, hp, 'I play too (host guesses)'),
         btn('Start', () => { if (push()) send({ type: 'start' }); })));
     } else {
@@ -248,21 +287,47 @@
     return out;
   }
 
-  function review() {
+  let reviewLis = new Map();
+  function reviewHeader() {
+    return 'You must keep ' + view.keep + ' songs. Remove up to ' + (view.removalsLeft || 0) + ' more (if you do not, we drop the extras at random).';
+  }
+  function trackLi(t, i) {
+    const f = spotifyFrame(t.id, 'Your song ' + (i + 1));
+    const b = btn('Remove', () => send({ type: 'remove', trackId: t.id }), 'secondary', 'remove-' + t.id);
+    const li = el('li', { class: 'track' }, f || el('span', { text: t.title }), f ? null : el('span', { class: 'muted', text: t.artist }), b);
+    reviewLis.set(t.id, { li, b });
+    return li;
+  }
+  // updates the review screen in place so the song iframes are never detached or reloaded
+  function syncReview() {
+    const tracks = view.myTracks || [];
+    const ids = new Set(tracks.map((t) => t.id));
+    for (const [id, r] of [...reviewLis]) if (!ids.has(id)) { r.li.remove(); reviewLis.delete(id); }
+    const ul = $('review-list');
+    tracks.forEach((t, i) => { if (!reviewLis.has(t.id)) ul.append(trackLi(t, i)); });
+    const keepN = Number.isFinite(view.keep) ? view.keep : 1;
+    const can = (view.removalsLeft || 0) > 0 && tracks.length > keepN;
+    for (const r of reviewLis.values()) r.b.disabled = !can;
+    $('review-head').textContent = reviewHeader();
     const me = view.players.find((p) => p.id === view.you);
-    const tracks = view.myTracks;
-    if (!tracks) return [el('p', { text: 'Waiting for the other players…' })];
-    const left = view.removalsLeft || 0;
-    const out = [el('section', {}, el('h2', { text: 'Your songs' }),
-      el('p', { class: 'muted', text: left > 0 ? 'Remove songs you do not want played. Removals left: ' + left : 'No removals left.' }),
-      el('ul', {}, ...tracks.map((t) => el('li', { class: 'track' },
-        el('span', { text: t.title }), el('span', { class: 'muted', text: t.artist }),
-        left > 0 && tracks.length > 1 ? btn('Remove', () => send({ type: 'remove', trackId: t.id }), 'secondary', 'remove-' + t.id) : null))))];
-    if (me && me.ready) out.push(el('p', { text: 'Ready. Waiting for the others…' }));
-    else out.push(btn('Ready', () => send({ type: 'ready' })));
-    out.push(el('p', { class: 'muted', text: 'Ready: ' + view.players.filter((p) => p.ready).length + '/' + view.players.length }));
+    const n = view.players.filter((p) => p.ready).length + '/' + view.players.length;
+    $('review-ready').hidden = !!(me && me.ready);
+    $('review-status').textContent = me && me.ready ? 'Ready. Waiting for the others… ' + n : 'Ready: ' + n;
+  }
+
+  function review() {
+    if (!view.myTracks) return [el('p', { text: 'Waiting for the other players…' })];
+    reviewLis = new Map();
+    const ready = btn('Ready', () => send({ type: 'ready' }));
+    ready.id = 'review-ready';
+    const sec = el('section', {}, el('h2', { text: 'Your songs' }),
+      el('p', { id: 'review-head', class: 'muted' }), el('ul', { id: 'review-list' }), ready,
+      el('p', { id: 'review-status', class: 'muted' }));
+    const out = [sec];
+    pendingReviewSync = true;
     return out;
   }
+  let pendingReviewSync = false;
 
   function roundHeader() {
     return el('p', { class: 'muted', text: 'Round ' + (view.round.index + 1) + ' of ' + view.round.total });
@@ -302,6 +367,19 @@
       out.push(el('p', { id: 'audio-status', class: 'muted', text: audioStarted ? 'Playing' : 'Waiting for audio…' }),
         el('progress', { id: 'audio-progress', max: audioDur || 1, value: Math.min(audioPos, audioDur || 1), 'aria-label': 'Playback progress' }));
     }
+    seeking = false;
+    if (isHost() && controller) {
+      const call = (n, ...a) => { if (typeof controller[n] === 'function') { controller[n](...a); return true; } return false; };
+      const toggle = btn(audioStarted ? 'Pause' : 'Resume', () => {
+        if (audioStarted) call('pause') || call('togglePlay'); else call('resume') || call('togglePlay');
+      }, 'secondary', 'audio-toggle');
+      toggle.id = 'audio-toggle';
+      const seek = el('input', { id: 'audio-seek', type: 'range', min: 0, max: Math.max(1, Math.floor(audioDur / 1000)), step: 1, value: Math.floor(audioPos / 1000) });
+      seek.addEventListener('input', () => { seeking = true; });
+      seek.addEventListener('change', () => { seeking = false; call('seek', Number(seek.value)); });
+      out.push(toggle, el('label', { htmlFor: 'audio-seek', text: 'Seek' }), seek,
+        el('p', { class: 'muted', text: 'The round timer keeps running while paused.' }));
+    }
     const iAmGuesser = view.settings.hostPlays || !isHost();
     if (!iAmGuesser) {
       out.push(el('p', { text: 'Hosting' }), el('p', { class: 'muted', text: 'Guessed: ' + view.round.guessedCount }));
@@ -326,14 +404,22 @@
     return out;
   }
 
+  let prevStreak = 0, streakRound = -1, streakLost = false;
   function reveal() {
     const r = view.reveal;
     const pts = r.deltas[view.you] || 0;
-    const out = [roundHeader(),
-      el('section', {}, el('h2', { text: 'It was ' + nameOf(r.ownerId) + '’s song' }),
-        el('p', { text: r.track.title }), el('p', { class: 'muted', text: r.track.artist }),
-        el('p', { text: view.myGuess ? (view.myGuess === r.ownerId ? 'You got it! +' + pts : 'Wrong guess, +0') : 'No guess, +0' })),
-      scoreboard()];
+    const me = view.players.find((p) => p.id === view.you) || {};
+    const mine = me.streak || 0;
+    if (streakRound !== view.round.index) { streakLost = prevStreak >= STREAK_MIN && mine === 0; prevStreak = mine; streakRound = view.round.index; }
+    const card = el('section', { id: 'reveal-card' }, el('h2', { text: 'It was ' + nameOf(r.ownerId) + '’s song' }));
+    card.dataset.round = String(view.round.index);
+    // the host listens through the (now visible) host embed; everyone else gets a slim player
+    const f = isHost() ? null : spotifyFrame(r.track.id, 'Revealed song');
+    if (f) card.append(f);
+    card.append(el('p', { text: view.myGuess ? (view.myGuess === r.ownerId ? 'You got it! +' + pts : 'Wrong guess, +0') : 'No guess, +0' }));
+    if (mine >= STREAK_MIN) card.append(el('p', {}, streakEl(me)));
+    else if (streakLost) card.append(el('p', { class: 'muted', text: 'Streak lost' }));
+    const out = [roundHeader(), card, scoreboard()];
     if (isHost()) out.push(btn('Next', () => send({ type: 'next' })));
     return out;
   }
@@ -358,20 +444,27 @@
   }
 
   function render() {
-    if (view.phase === 'lobby' && lastPhase === 'lobby' && $('lobby-players')) {
+    if (view.phase === 'review' && lastPhase === 'review' && $('review-list')) {
+      syncReview();
+    } else if (view.phase === 'reveal' && lastPhase === 'reveal' && $('reveal-card') && $('reveal-card').dataset.round === String(view.round.index)) {
+      refreshScoreboard();
+    } else if (view.phase === 'lobby' && lastPhase === 'lobby' && $('lobby-players')) {
       // keep the settings form (typing, focus) intact; only refresh the player list and idle fields
       $('lobby-players').replaceChildren(...lobbyPlayers());
       syncBots();
       syncQr();
       const set = (id, v) => { const f = $(id); if (f && document.activeElement !== f) f[typeof v === 'boolean' ? 'checked' : 'value'] = v; };
-      set('f-source', view.settings.source); set('f-total', view.settings.total);
-      set('f-buffer', view.settings.buffer); set('f-hp', view.settings.hostPlays);
+      set('f-source', view.settings.source); set('f-per', view.settings.perPerson);
+      set('f-buffer', view.settings.buffer);
+      if ($('f-buffer') && document.activeElement !== $('f-per')) $('f-buffer').max = bufMax(view.settings.perPerson);
+      set('f-hp', view.settings.hostPlays);
     } else {
       clearInterval(tick);
       const a = document.activeElement;
       const fk = a && a.dataset ? a.dataset.focus || a.id : null;
       const f = phases[view.phase];
       app.replaceChildren(layout(f ? f() : [el('p', { text: 'Unknown state' })]));
+      if (pendingReviewSync) { pendingReviewSync = false; syncReview(); }
       if (fk) {
         const t = [...app.querySelectorAll('[data-focus],[id]')].find((x) => (x.dataset.focus || x.id) === fk);
         if (t) t.focus();
