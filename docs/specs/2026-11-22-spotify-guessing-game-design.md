@@ -10,13 +10,15 @@ A web game for me and my friends (not for the app store). PC and mobile browsers
 4. Per round, the host plays the song in an embedded Spotify player. Everyone guesses **whose song it is**.
 5. The round ends when the 20s timer runs out or everyone has guessed. The app then reveals the owner and shows the scoreboard.
 6. Scoring is Kahoot-style: a correct guess earns 1000 points scaled down linearly by response time (min 500 at the deadline). A wrong guess or no guess earns 0.
+7. Streaks (display only, never change scoring): a player's streak is the number of correct guesses in a row. A wrong guess or no guess resets it to 0. A round on the player's own song, and rounds a non-playing host sits out, leave it unchanged. It is shown as a fire emoji and the number next to the name from a streak of 2.
+8. After the answer is revealed everyone sees a Spotify player for the revealed song (instead of its title as text) with the player's normal controls; the host also gets pause/resume and a seek bar while the song plays (the round timer does not pause).
 7. After the last song, the final scoreboard is shown.
 
 ## Host settings
 
 - Song source: recents or liked songs (applies to all players).
-- Number of songs (default 12), split equally across players (rounded down).
-- Song buffer: how many of their own picked songs each player may remove before the game starts. Removed songs are not replaced, so the game has fewer songs (e.g. 12 picked, 2 removed = 10 played).
+- Songs per person (default 4, 1 to 25): every participant is dealt this many of their own songs (capped to what the smallest library allows, so everyone gets the same number).
+- Removals (default 1, 0 up to songs per person minus 1): each player must end up contributing `songs per person - removals` songs (default 4 - 1 = 3). They choose which to remove while reviewing; if they remove fewer, random extra songs of theirs are dropped when the game starts, so everyone always contributes the same number. Removed songs are not replaced. While reviewing, each of a player's own songs is shown as a slim Spotify player so they can listen before removing.
 - Host also plays: toggle (default on). If off, the host only controls the game and does not guess or contribute songs.
 
 ## Roles and devices
