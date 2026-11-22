@@ -35,7 +35,7 @@
 
   // --- socket
   let ws = null, retry = 0, view = null, closing = false, awaitingHello = false;
-  let guessErrTimer = null, localDeadline = null, timeUp = false, guessBtns = [];
+  let guessErrTimer = null, localDeadline = null, timeUp = false, guessBtns = [], guessPending = false;
   function clearGuessErr() { clearTimeout(guessErrTimer); guessErrTimer = null; }
   function send(msg) { clearGuessErr(); showError(''); if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg)); }
   function showError(msg) { const e = $('error'); e.textContent = msg || ''; e.hidden = !msg; }
@@ -59,15 +59,18 @@
           if (!view || view.phase !== 'finished') ended('That game is no longer running');
         }
         else {
+          guessPending = false;
           showError(String(m.message));
           if (view.phase === 'playing') { // keep guess rejections visible ~3s despite later state broadcasts
-            clearGuessErr(); guessErrTimer = setTimeout(() => { guessErrTimer = null; showError(''); }, 3000);
+            clearGuessErr(); const msg = String(m.message);
+            guessErrTimer = setTimeout(() => { guessErrTimer = null; if ($('error').textContent === msg) showError(''); }, 3000);
             if (!timeUp && !view.myGuess) for (const b of guessBtns) b.disabled = false;
           }
         }
       }
       else if (m.type === 'state') {
         awaitingHello = false; if (!guessErrTimer) showError(''); view = m.view;
+        if (view.myGuess || view.phase !== 'playing') guessPending = false;
         const rm = view.round && view.round.remainingMs;
         localDeadline = view.phase === 'playing' && Number.isFinite(rm) ? performance.now() + rm : null;
         render();
@@ -260,7 +263,8 @@
       out.push(el('h2', { text: 'Whose song is this?' }));
       for (const p of view.players) {
         if (p.id === view.you || (!view.settings.hostPlays && p.id === view.hostId)) continue;
-        const b = btn(tag(p), () => { for (const x of guessBtns) x.disabled = true; send({ type: 'guess', playerId: p.id }); }, '', 'guess-' + p.id);
+        const b = btn(tag(p), () => { guessPending = true; for (const x of guessBtns) x.disabled = true; send({ type: 'guess', playerId: p.id }); }, '', 'guess-' + p.id);
+        b.disabled = guessPending;
         guessBtns.push(b);
         out.push(b);
       }
@@ -320,7 +324,6 @@
     syncEmbed();
   }
 
-  // Note: the countdown uses the client clock against a server epoch deadline, so clock skew shifts it; the server is authoritative.
   if (!key) { app.replaceChildren(el('p', {}, 'No session. ', el('a', { href: '/', text: 'Go back' }))); }
   else connect();
 })();
