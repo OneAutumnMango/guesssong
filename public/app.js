@@ -141,7 +141,6 @@
       out.push(el('section', { id: 'lobby-bots' }, el('h2', { text: 'Test players' }),
         btn('Add test player', () => send({ type: 'addBot' }), '', 'add-bot'),
         btn('Remove test player', () => send({ type: 'removeBot' }), 'secondary', 'remove-bot')));
-      syncBots();
     }
     if (isHost()) {
       const s = view.settings;
@@ -266,6 +265,7 @@
         if (t) t.focus();
       }
     }
+    if (view.phase === 'lobby') syncBots();
     lastPhase = view.phase;
     devBanner();
     syncEmbed();
