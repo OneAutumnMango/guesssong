@@ -152,6 +152,7 @@ export class Game {
   pauseRound() {
     this.#timedRound();
     if (this.pausedAt !== null) throw new Error('Already paused');
+    if (this.now() - this.roundStart > this.durationMs) throw new Error('Time is up'); // no pausing inside the grace window
     this.pausedAt = this.now();
   }
 

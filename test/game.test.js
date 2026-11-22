@@ -494,11 +494,15 @@ test('a guess while paused is scored from the frozen time and paused time is not
   assert.equal(g.view(owner).round.paused, false); // ended while paused: state cleaned up
 });
 
-test('pause still rejects a guess whose frozen elapsed already exceeds the duration', () => {
-  const { g, guesser } = timedRound();
+test('pause after the nominal deadline (grace window) is rejected; just before is accepted', () => {
+  const late = timedRound().g;
   clock = 20001;
-  g.pauseRound();
-  assert.equal(g.guessProblem(guesser), 'Time is up');
+  assert.throws(() => late.pauseRound(), /Time is up/);
+  assert.equal(late.view('a').round.paused, false);
+  const ok = timedRound().g;
+  clock = 19999;
+  ok.pauseRound();
+  assert.equal(ok.view('a').round.paused, true);
 });
 
 test('several pause/resume cycles accumulate', () => {
