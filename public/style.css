@@ -60,7 +60,7 @@ li .grow { flex: 1; min-width: 0; }
 #audio-time { text-align: center; margin: 0 0 8px; }
 .guess-grid button { margin: 8px 0; }
 
-/* game page: the embed lives in #stage so it never moves; wrappers vanish on mobile (DOM order = visual order) */
+/* game page: the embed lives in #stage so it never moves; DOM order = visual order, desktop columns via grid areas */
 #embed-note { margin-bottom: 12px; font-weight: 600; }
 /* off-screen but rendered: display:none / visibility:hidden can stop playback */
 /* Must stay INSIDE the viewport: Spotify marks its iframe loading="lazy", so one parked off-screen
@@ -69,20 +69,20 @@ li .grow { flex: 1; min-width: 0; }
 .embed-hidden h2 { display: none; }
 .embed-visible { background: var(--card); border-radius: 12px; padding: 16px; margin-bottom: 16px; width: 100%; }
 .embed-visible iframe { width: 100%; border: 0; display: block; }
-body.game #app, body.game .layout, body.game .main-col, body.game .side-col { display: contents; }
 @media (min-width: 900px) {
   body.game main { max-width: 1100px; padding: 32px; }
   body.game { font-size: 18px; }
   body.game h2 { font-size: 1.4rem; }
   body.game #stage {
     display: grid; grid-template-columns: 2fr 1fr; column-gap: 24px; align-items: start;
-    grid-template-areas: "note side" "embed side" "main side"; grid-template-rows: auto auto 1fr;
+    grid-template-areas: "main side" "note side" "embed side" "foot side"; grid-template-rows: auto auto auto 1fr;
   }
+  body.game #app { grid-area: main; min-width: 0; }
   body.game #embed-note { grid-area: note; }
   body.game #embed-wrap.embed-visible { grid-area: embed; }
-  body.game .main-col { display: block; grid-area: main; min-width: 0; }
-  body.game .side-col { display: block; grid-area: side; min-width: 0; }
-  body.game .side-col:empty { display: none; }
+  body.game #app-foot { grid-area: foot; min-width: 0; }
+  body.game #app-side { grid-area: side; min-width: 0; }
+  body.game #app-side:empty { display: none; }
   body.game .guess-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
   body.game .guess-grid button { margin: 0; min-height: 72px; }
 }

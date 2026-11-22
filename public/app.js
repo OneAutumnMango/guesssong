@@ -3,7 +3,7 @@
   const STREAK_MIN = 2;
   const SEAT_KEY = 'gs.seat', SEAT_TTL = 12 * 3600 * 1000;
   const $ = (id) => document.getElementById(id);
-  const app = $('app');
+  const app = $('app'), appFoot = $('app-foot'), appSide = $('app-side');
 
   // --- saved seat (localStorage): lets a phone rejoin after a lost connection or closed tab
   function readSeat() {
@@ -15,7 +15,13 @@
     return null;
   }
   function saveSeat(k, code) { try { localStorage.setItem(SEAT_KEY, JSON.stringify({ key: k, code: code || null, savedAt: Date.now() })); } catch (e) { /* ignore */ } }
-  function clearSeat() { try { localStorage.removeItem(SEAT_KEY); } catch (e) { /* ignore */ } }
+  // only remove the seat if it belongs to THIS tab's key (another tab may have saved a newer one)
+  function clearSeat() {
+    try {
+      const s = JSON.parse(localStorage.getItem(SEAT_KEY));
+      if (!s || s.key === key) localStorage.removeItem(SEAT_KEY);
+    } catch (e) { try { localStorage.removeItem(SEAT_KEY); } catch (e2) { /* ignore */ } }
+  }
 
   // --- key: hash -> sessionStorage -> localStorage seat; the hash is scrubbed after reading
   let key = null, savedCode = null;
@@ -29,8 +35,8 @@
     try { key = sessionStorage.getItem('key'); } catch (e) { /* ignore */ }
     const seat = readSeat();
     if (seat) {
-      savedCode = seat.code;
       if (!key) { key = seat.key; try { sessionStorage.setItem('key', key); } catch (e) { /* ignore */ } }
+      if (seat.key === key) savedCode = seat.code;
     }
   }
   const roomCode = () => {
@@ -55,20 +61,21 @@
 
   // --- socket
   let ws = null, retry = 0, view = null, closing = false, awaitingHello = false, reconnectTimer = null;
+  let prevViewPaused = null;
   let guessErrTimer = null, localDeadline = null, timeUp = false, guessBtns = [], guessPending = false;
-  let pausedIntent = false, revealClicked = false;
+  let pausedIntent = false, revealClicked = false, lastSent = '', lastLocalPauseAt = -1e9;
   function clearGuessErr() { clearTimeout(guessErrTimer); guessErrTimer = null; }
-  function send(msg) { clearGuessErr(); showError(''); if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg)); }
+  function send(msg) { lastSent = msg.type; clearGuessErr(); showError(''); if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg)); }
   function showError(msg) { const e = $('error'); e.textContent = msg || ''; e.hidden = !msg; }
   function ended(msg) {
     if (controller && controller.pause) controller.pause();
     clearInterval(tick); clearInterval(watchTimer);
     $('error').hidden = true; $('banner').hidden = true;
     const code = roomCode();
-    app.replaceChildren(layout([el('div', { class: 'terminal' },
+    mount([el('div', { class: 'terminal' },
       el('p', { text: msg }),
       code ? el('a', { class: 'btn', href: '/login?room=' + encodeURIComponent(code), text: 'Rejoin with Spotify' }) : null,
-      el('a', { class: 'btn secondary', href: '/', text: 'Home page' }))]));
+      el('a', { class: 'btn secondary', href: '/', text: 'Home page' }))]);
     setEmbedVisible(false); $('embed-note').hidden = true;
   }
   window.addEventListener('pagehide', () => { closing = true; });
@@ -88,13 +95,14 @@
           closing = true; ws.close(); clearSeat();
           if (!view || view.phase !== 'finished') ended('That game is no longer running');
         } else {
-          guessPending = false;
+          const guessErr = lastSent === 'guess';
+          if (guessErr) guessPending = false;
           showError(String(m.message));
           if (revealClicked && view && view.phase === 'playing') { revealClicked = false; const rb = $('reveal-btn'); if (rb) rb.disabled = false; }
           if (view && view.phase === 'playing') { // keep guess rejections visible ~3s despite later state broadcasts
             clearGuessErr(); const msg = String(m.message);
             guessErrTimer = setTimeout(() => { guessErrTimer = null; if ($('error').textContent === msg) showError(''); }, 3000);
-            if (!timeUp && !view.myGuess) for (const b of guessBtns) b.disabled = false;
+            if (guessErr && !timeUp && !view.myGuess) for (const b of guessBtns) b.disabled = false;
           }
         }
       } else if (m.type === 'state') {
@@ -103,7 +111,10 @@
         if (view.phase === 'finished') clearSeat();
         else if (typeof view.code === 'string' && view.code && view.code !== savedCode) { savedCode = view.code; saveSeat(key, view.code); }
         const r = view.round || {};
-        pausedIntent = !!r.paused;
+        // a state sent before our own pause/resume click was processed must not undo the local intent
+        if (performance.now() - lastLocalPauseAt > 1000) pausedIntent = !!r.paused;
+        if (view.phase === 'playing' && prevViewPaused !== null && prevViewPaused !== !!r.paused && r.timed !== false) $('live').textContent = r.paused ? 'Round paused' : 'Round resumed';
+        prevViewPaused = view.phase === 'playing' ? !!r.paused : null;
         localDeadline = view.phase === 'playing' && Number.isFinite(r.remainingMs) ? performance.now() + r.remainingMs : null;
         render();
       }
@@ -122,7 +133,7 @@
   let controller = null, apiFailed = false, loadedUri = null, pendingUri = null, playerLoaded = false;
   let playClicked = false, playSent = false, fallback = false, slowLoad = false, watchTimer = null, embedPhase = null;
   let clickAt = 0, loadedAt = 0, prevPaused;
-  let audioStarted = false, audioPlaying = false, audioPos = 0, audioDur = 0, seeking = false;
+  let audioStarted = false, audioPlaying = false, audioEnded = false, audioPos = 0, audioDur = 0, seeking = false;
   const timed = () => !!view && !!view.round && view.round.timed !== false;
   const fmt = (ms) => { const s = Math.max(0, Math.floor(ms / 1000)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
   function setEmbedVisible(v) {
@@ -147,9 +158,10 @@
     b.replaceChildren(svg);
     b.setAttribute('aria-label', label);
   }
+  const toggleKind = () => (audioEnded ? ['play', 'Play'] : audioPlaying ? ['pause', 'Pause'] : ['play', 'Resume']);
   function updateAudioUi() {
     const tg = $('audio-toggle');
-    if (tg) setIcon(tg, audioPlaying ? 'pause' : 'play', audioPlaying ? 'Pause' : 'Resume');
+    if (tg) setIcon(tg, toggleKind()[0], toggleKind()[1]);
     const sk = $('audio-seek'), tm = $('audio-time');
     if (tm) tm.textContent = timeText();
     if (sk && !seeking) { sk.max = Math.max(1, Math.floor(audioDur / 1000)); sk.value = Math.floor(audioPos / 1000); sk.setAttribute('aria-valuetext', spoken()); }
@@ -160,11 +172,12 @@
     audioPos = Number(d.position) || 0; audioDur = Number(d.duration) || 0;
     const was = prevPaused; prevPaused = d.isPaused;
     audioPlaying = d.isPaused === false;
+    audioEnded = audioDur > 0 && audioPos >= audioDur - 1000;
     audioStarted = audioPlaying && !d.isBuffering;
     updateAudioUi();
     if (!view || view.you !== view.hostId) return;
     // ignore a late event of the previous track: sound must be fresh (near the start or for the loaded uri)
-    const fresh = audioPos < 2000 || (d.playingURI && d.playingURI === loadedUri);
+    const fresh = d.playingURI ? d.playingURI === loadedUri : audioPos < 2000;
     // the round starts when sound starts: our Play click, or the embed's own button in the fallback
     if (audioStarted && fresh && view.phase === 'between' && !playSent && (playClicked || fallback)) {
       playSent = true; fallback = false;
@@ -173,7 +186,8 @@
       syncEmbed();
     }
     if (view.phase === 'playing') {
-      if (was === false && d.isPaused === true && audioPos < audioDur - 1000) sendPause(); // paused by itself, not the end of the track
+      if (performance.now() - lastLocalPauseAt < 1000) return; // echo of our own click
+      if (was === false && d.isPaused === true && !audioEnded) sendPause(); // paused by itself, not the end of the track
       else if (was === true && d.isPaused === false) sendResume();
     }
   }
@@ -459,10 +473,12 @@
   function hostControls() {
     const call = (n, ...a) => { if (typeof controller[n] === 'function') { controller[n](...a); return true; } return false; };
     const toggle = btn('', () => {
-      if (audioPlaying) { call('pause') || call('togglePlay'); sendPause(); } else { call('resume') || call('togglePlay'); sendResume(); }
+      lastLocalPauseAt = performance.now();
+      if (audioEnded) { call('seek', 0); call('resume') || call('togglePlay'); sendResume(); } // replay; never a round start
+      else if (audioPlaying) { call('pause') || call('togglePlay'); sendPause(); } else { call('resume') || call('togglePlay'); sendResume(); }
     }, 'icon-btn', 'audio-toggle');
     toggle.id = 'audio-toggle';
-    setIcon(toggle, audioPlaying ? 'pause' : 'play', audioPlaying ? 'Pause' : 'Resume');
+    setIcon(toggle, toggleKind()[0], toggleKind()[1]);
     const seek = el('input', { id: 'audio-seek', type: 'range', min: 0, max: Math.max(1, Math.floor(audioDur / 1000)), step: 1, value: Math.floor(audioPos / 1000), 'aria-label': 'Seek' });
     seek.setAttribute('aria-valuetext', spoken());
     seek.addEventListener('input', () => { seeking = true; });
@@ -540,7 +556,7 @@
     if (mine >= STREAK_MIN) card.append(el('p', {}, streakEl(me)));
     else if (streakLost) card.append(el('p', { class: 'muted', text: 'Streak lost' }));
     const out = [roundHeader(), card, scoreboard()];
-    if (isHost()) out.push(btn('Next', () => send({ type: 'next' })));
+    if (isHost()) out.push(btn('Next', () => send({ type: 'next' }), 'foot', 'Next'));
     return out;
   }
 
@@ -556,11 +572,12 @@
     }
   }
 
-  // DOM order = visual order; two columns on desktop come from CSS grid areas, not from reordering
-  function layout(kids, sideFirst) {
-    const main = el('div', { class: 'main-col' }), side = el('div', { class: 'side-col' });
-    for (const k of kids) (k.classList.contains('side') ? side : main).append(k);
-    return el('div', { class: 'layout' }, ...(sideFirst ? [side, main] : [main, side]));
+  // three persistent containers in #stage: main, foot (Next button), side; DOM order = visual order everywhere,
+  // the desktop two-column layout comes from CSS grid areas
+  function mount(kids) {
+    const m = [], f = [], sd = [];
+    for (const k of kids) (k.classList.contains('side') ? sd : k.classList.contains('foot') ? f : m).push(k);
+    app.replaceChildren(...m); appFoot.replaceChildren(...f); appSide.replaceChildren(...sd);
   }
 
   function render() {
@@ -587,11 +604,11 @@
       const a = document.activeElement;
       const fk = a && a.dataset ? a.dataset.focus || a.id : null;
       const f = phases[view.phase];
-      app.replaceChildren(layout(f ? f() : [el('p', { text: 'Unknown state' })], view.phase === 'lobby'));
+      mount(f ? f() : [el('p', { text: 'Unknown state' })]);
       if (pendingReviewSync) { pendingReviewSync = false; syncReview(); }
       if (pendingPlaySync) { pendingPlaySync = false; syncPlaying(); updCountdown(); }
       if (fk) {
-        const t = [...app.querySelectorAll('[data-focus],[id]')].find((x) => (x.dataset.focus || x.id) === fk);
+        const t = [...$('stage').querySelectorAll('[data-focus],[id]')].find((x) => (x.dataset.focus || x.id) === fk);
         if (t) t.focus();
       }
     }
@@ -602,7 +619,7 @@
   }
 
   if (!key) {
-    app.replaceChildren(layout([el('div', { class: 'terminal' }, el('p', { text: 'No session.' }),
-      el('a', { class: 'btn secondary', href: '/', text: 'Home page' }))]));
+    mount([el('div', { class: 'terminal' }, el('p', { text: 'No session.' }),
+      el('a', { class: 'btn secondary', href: '/', text: 'Home page' }))]);
   } else connect();
 })();
