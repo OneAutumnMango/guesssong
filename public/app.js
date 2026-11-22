@@ -35,7 +35,9 @@
 
   // --- socket
   let ws = null, retry = 0, view = null, closing = false, awaitingHello = false;
-  function send(msg) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg)); }
+  let guessErrTimer = null, localDeadline = null, timeUp = false, guessBtns = [];
+  function clearGuessErr() { clearTimeout(guessErrTimer); guessErrTimer = null; }
+  function send(msg) { clearGuessErr(); showError(''); if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg)); }
   function showError(msg) { const e = $('error'); e.textContent = msg || ''; e.hidden = !msg; }
   function ended(msg) {
     if (controller && controller.pause) controller.pause();
@@ -56,9 +58,20 @@
           closing = true; ws.close();
           if (!view || view.phase !== 'finished') ended('That game is no longer running');
         }
-        else showError(String(m.message));
+        else {
+          showError(String(m.message));
+          if (view.phase === 'playing') { // keep guess rejections visible ~3s despite later state broadcasts
+            clearGuessErr(); guessErrTimer = setTimeout(() => { guessErrTimer = null; showError(''); }, 3000);
+            if (!timeUp && !view.myGuess) for (const b of guessBtns) b.disabled = false;
+          }
+        }
       }
-      else if (m.type === 'state') { awaitingHello = false; showError(''); view = m.view; render(); }
+      else if (m.type === 'state') {
+        awaitingHello = false; if (!guessErrTimer) showError(''); view = m.view;
+        const rm = view.round && view.round.remainingMs;
+        localDeadline = view.phase === 'playing' && Number.isFinite(rm) ? performance.now() + rm : null;
+        render();
+      }
     };
     ws.onclose = (ev) => {
       if (closing) return;
@@ -125,7 +138,7 @@
     if (!img || !u) return;
     const src = '/qr.svg?room=' + encodeURIComponent(view.code);
     if (img.getAttribute('src') !== src) {
-      img.hidden = false;
+      img.hidden = false; img.parentNode.hidden = false;
       img.src = src;
       img.alt = 'QR code to join room ' + view.code;
     }
@@ -158,7 +171,7 @@
     out.push(el('section', { id: 'lobby-players' }, ...lobbyPlayers()));
     if (typeof view.code === 'string' && view.code) {
       const img = el('img', { id: 'qr-img', width: 200, height: 200 });
-      img.onerror = () => { img.hidden = true; };
+      img.onerror = () => { img.hidden = true; img.parentNode.hidden = true; };
       out.push(el('section', { id: 'lobby-qr' }, el('h2', { text: 'Scan to join' }),
         el('div', { class: 'qr-wrap' }, img), el('p', { id: 'qr-url', class: 'selectable' })));
     }
@@ -229,21 +242,31 @@
     const out = [roundHeader()];
     const cd = el('p', { class: 'big', id: 'countdown' });
     out.push(cd);
-    const upd = () => { cd.textContent = Math.ceil(Math.max(0, view.round.deadline - Date.now()) / 1000) + 's'; };
-    upd(); tick = setInterval(upd, 250);
+    timeUp = false; guessBtns = [];
+    const upd = () => {
+      if (localDeadline === null) { cd.textContent = ''; return; }
+      const ms = Math.max(0, localDeadline - performance.now());
+      if (ms === 0) { timeUp = true; cd.textContent = 'Time is up'; for (const b of guessBtns) b.disabled = true; }
+      else cd.textContent = Math.ceil(ms / 1000) + 's';
+    };
     const iAmGuesser = view.settings.hostPlays || !isHost();
     if (!iAmGuesser) {
       out.push(el('p', { text: 'Hosting' }), el('p', { class: 'muted', text: 'Guessed: ' + view.round.guessedCount }));
+    } else if (view.iOwnThisSong) {
+      out.push(el('p', { text: 'This one is yours! Sit this round out while the others guess.' }));
     } else if (view.myGuess) {
       out.push(el('p', { class: 'big', text: 'Locked in' }));
     } else {
       out.push(el('h2', { text: 'Whose song is this?' }));
       for (const p of view.players) {
         if (p.id === view.you || (!view.settings.hostPlays && p.id === view.hostId)) continue;
-        out.push(btn(tag(p), () => send({ type: 'guess', playerId: p.id }), '', 'guess-' + p.id));
+        const b = btn(tag(p), () => { for (const x of guessBtns) x.disabled = true; send({ type: 'guess', playerId: p.id }); }, '', 'guess-' + p.id);
+        guessBtns.push(b);
+        out.push(b);
       }
     }
     out.push(scoreboard());
+    upd(); tick = setInterval(upd, 250);
     return out;
   }
 
