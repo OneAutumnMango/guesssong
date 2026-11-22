@@ -19,7 +19,7 @@ const defaultPublic = fileURLToPath(new URL('../public', import.meta.url));
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
-export function createServer({ clientId, publicUrl, spotify = realSpotify, durationMs = 20000, publicDir = defaultPublic }) {
+export function createServer({ clientId, publicUrl, spotify = realSpotify, durationMs = 20000, publicDir = defaultPublic, fetchTimeoutMs = 15000 }) {
   const pending = new Map(); // state -> { verifier, room, createdAt }
   const rooms = new Map(); // code -> { game, players: Map<key,{id,token,socket}>, timer, starting, emptySince }
   const redirectUri = publicUrl + '/callback';
@@ -50,18 +50,23 @@ export function createServer({ clientId, publicUrl, spotify = realSpotify, durat
     room.starting = true;
     try {
       const { game } = room;
-      const entries = [...room.players.values()];
+      const ids = game.participants();
+      const withTimeout = (p) => {
+        let t;
+        const timer = new Promise((_, rej) => { t = setTimeout(() => rej(new Error('timeout')), fetchTimeoutMs); });
+        return Promise.race([p, timer]).finally(() => clearTimeout(t));
+      };
+      const results = await Promise.allSettled(ids.map((id) => {
+        const e = [...room.players.values()].find((x) => x.id === id);
+        return withTimeout(Promise.resolve().then(() => spotify.fetchPool(e?.token, game.settings.source)));
+      }));
       const pools = {};
-      for (const id of game.participants()) {
-        const p = entries.find((e) => e.id === id);
-        try {
-          pools[id] = await spotify.fetchPool(p.token, game.settings.source);
-        } catch {
-          throw new Error(`Could not load songs for ${game.players.get(id).name}`);
-        }
+      for (const [i, id] of ids.entries()) {
+        if (results[i].status === 'rejected') throw new Error(`Could not load songs for ${game.players.get(id).name}`);
+        pools[id] = results[i].value;
       }
       game.start(pools);
-      for (const p of entries) p.token = null; // tokens never outlive a successful start
+      for (const p of room.players.values()) p.token = null; // tokens never outlive a successful start
     } finally {
       room.starting = false;
     }
@@ -198,7 +203,8 @@ export function createServer({ clientId, publicUrl, spotify = realSpotify, durat
     if (existing) { // same Spotify account logging in again: rotate its key
       room.players.delete(existing[0]);
       existing[1].socket?.close(1000);
-      room.players.set(key, { id: profile.id, token, socket: null });
+      const keep = room.game.phase === 'lobby' && !room.starting; // never store a token once start began
+      room.players.set(key, { id: profile.id, token: keep ? token : null, socket: null });
       room.game.setConnected(profile.id, false);
     } else {
       try {
@@ -240,7 +246,9 @@ export function createServer({ clientId, publicUrl, spotify = realSpotify, durat
   });
 
   server.on('upgrade', (req, socket, head) => {
-    if (new URL(req.url, 'http://localhost').pathname !== '/ws') return socket.destroy();
+    let path;
+    try { path = new URL(req.url, 'http://localhost').pathname; } catch { return socket.destroy(); }
+    if (path !== '/ws') return socket.destroy();
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
   });
 
@@ -258,6 +266,7 @@ export function createServer({ clientId, publicUrl, spotify = realSpotify, durat
     wss.close();
   });
 
+  server.rooms = rooms; // exposed for tests only; never serialised
   return server;
 }
 

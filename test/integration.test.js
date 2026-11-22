@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import net from 'node:net';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import WebSocket from 'ws';
@@ -18,11 +19,14 @@ const spotify = {
     token === 'tok-empty' ? [] : Array.from({ length: 20 }, (_, i) => ({ id: `${token}-${i}`, uri: `spotify:track:${token}-${i}`, title: 't' + i, artist: 'a' })),
 };
 
-const publicDir = mkdtempSync(join(tmpdir(), 'pub-'));
+const tmp = mkdtempSync(join(tmpdir(), 'gs-'));
+const publicDir = join(tmp, 'pub');
+mkdirSync(publicDir);
 writeFileSync(join(publicDir, 'play.html'), '<p>hi</p>');
+writeFileSync(join(tmp, 'secret.txt'), 'SENTINEL-SECRET');
 
-async function boot(durationMs = 1000) {
-  const server = createServer({ clientId: 'cid', publicUrl: 'http://x.test', spotify, durationMs, publicDir });
+async function boot(durationMs = 300, extra = {}) {
+  const server = createServer({ clientId: 'cid', publicUrl: 'http://x.test', spotify: extra.spotify ?? spotify, durationMs, publicDir, ...extra.opts });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   const sockets = [];
@@ -62,7 +66,7 @@ async function boot(durationMs = 1000) {
 }
 
 test('full game flow, permissions, reconnect, cleanup', async () => {
-  const t = await boot(1000);
+  const t = await boot(300);
   try {
     const h = await t.login('new', 'H');
     assert.equal(h.res.status, 302);
@@ -77,10 +81,10 @@ test('full game flow, permissions, reconnect, cleanup', async () => {
     const jc = await t.connect(j.key);
     assert.equal((await jc.phase('lobby')).view.code, code);
 
-    // non-host is rejected; garbage never crashes
-    for (const type of ['start', 'settings', 'next', 'play']) {
+    // non-host is rejected in lobby (settings/start)
+    for (const type of ['start', 'settings']) {
       jc.send({ type, settings: {} });
-      assert.equal((await jc.err()).type, 'error');
+      assert.match((await jc.err()).message, /host/i);
     }
     jc.send('not json');
     await jc.err();
@@ -102,6 +106,9 @@ test('full game flow, permissions, reconnect, cleanup', async () => {
     await hc.phase('between');
     await jc.phase('between');
 
+    jc.send({ type: 'play' });
+    assert.match((await jc.err()).message, /host/i);
+
     // round 1: everyone guesses -> reveal well before the timer
     hc.send({ type: 'play' });
     await hc.phase('playing');
@@ -111,7 +118,9 @@ test('full game flow, permissions, reconnect, cleanup', async () => {
     hc.send({ type: 'guess', playerId: 'J' });
     jc.send({ type: 'guess', playerId: 'H' });
     await hc.phase('reveal');
-    assert.ok(Date.now() - t0 < 500);
+    assert.ok(Date.now() - t0 < 250);
+    jc.send({ type: 'next' });
+    assert.match((await jc.until((m) => m.type === 'error' && /host/i.test(m.message))).message, /host/i);
     hc.send({ type: 'next' });
     await hc.phase('between');
 
@@ -123,7 +132,8 @@ test('full game flow, permissions, reconnect, cleanup', async () => {
     const t1 = Date.now();
     hc2.send({ type: 'play' });
     await hc2.phase('reveal');
-    assert.ok(Date.now() - t1 >= 900);
+    const dt = Date.now() - t1;
+    assert.ok(dt >= 250 && dt <= 900, `reveal after ${dt}ms`);
     hc2.send({ type: 'next' });
     await hc2.phase('finished');
     await jc.phase('finished');
@@ -181,11 +191,63 @@ test('static serving stays inside publicDir', async () => {
     assert.equal(ok.status, 200);
     assert.equal(ok.headers['x-content-type-options'], 'nosniff');
     assert.match(ok.headers['content-type'], /text\/html/);
-    for (const p of ['/../package.json', '/%2e%2e/package.json', '/..%2fpackage.json', '/%00', '//etc/passwd']) {
+    for (const p of ['/../secret.txt', '/%2e%2e/secret.txt', '/..%2fsecret.txt', '/%2e%2e%2fsecret.txt', '/%00', '//etc/passwd']) {
       const r = await get(p);
       assert.notEqual(r.status, 200, p);
-      assert.ok(!r.body.includes('guesssong'), p);
+      assert.ok(!r.body.includes('SENTINEL'), p);
     }
+  } finally {
+    await t.close();
+  }
+});
+
+test('bad upgrade URL does not crash the server', async () => {
+  const t = await boot();
+  const port = t.server.address().port;
+  try {
+    await new Promise((res) => {
+      const s = net.connect(port, '127.0.0.1', () => s.write('GET http://[ HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n'));
+      s.on('error', () => {});
+      s.on('close', res);
+      setTimeout(() => { s.destroy(); res(); }, 500);
+    });
+    assert.equal((await fetch(`http://127.0.0.1:${port}/play.html`)).status, 200);
+  } finally {
+    await t.close();
+  }
+});
+
+test('key rotation after start stores no token', async () => {
+  const t = await boot();
+  try {
+    const h = await t.login('new', 'H');
+    const hc = await t.connect(h.key);
+    const code = (await hc.until((m) => m.type === 'state')).view.code;
+    const j = await t.login(code, 'J');
+    await t.connect(j.key);
+    hc.send({ type: 'start' });
+    await hc.phase('review');
+    await t.login(code, 'J'); // J logs in again after start
+    for (const p of t.server.rooms.get(code).players.values()) assert.equal(p.token, null);
+  } finally {
+    await t.close();
+  }
+});
+
+test('hung pool fetch times out, names the player, and start can be retried', async () => {
+  let hang = true;
+  const sp = { ...spotify, fetchPool: (token, src) => (hang && token === 'tok-slow' ? new Promise(() => {}) : spotify.fetchPool(token, src)) };
+  const t = await boot(300, { spotify: sp, opts: { fetchTimeoutMs: 100 } });
+  try {
+    const h = await t.login('new', 'H');
+    const hc = await t.connect(h.key);
+    const code = (await hc.until((m) => m.type === 'state')).view.code;
+    await t.connect((await t.login(code, 'slow')).key);
+    hc.send({ type: 'start' });
+    assert.match((await hc.err()).message, /Could not load songs for slow/);
+    hang = false;
+    hc.send({ type: 'start' });
+    await hc.phase('review');
   } finally {
     await t.close();
   }
