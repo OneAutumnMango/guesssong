@@ -128,13 +128,12 @@ export function createServer({ clientId, publicUrl: rawPublicUrl, spotify = real
       if (room.bots.length) { // test players borrow the host's songs (or the first real player's)
         const src = hostPool ?? pools[game.hostId] ?? pools[ids[0]];
         if (!src?.length) throw new Error('No songs available for test players');
-        const n = ids.length + room.bots.length;
         const sizes = [...ids.map((id) => pools[id].length), ...room.bots.map(() => src.length)];
-        const per = perPlayerCount(game.settings.total, n, sizes); // same count Game.start will use
+        const per = perPlayerCount(game.settings.perPerson, sizes); // same count Game.start will use
         const sharers = room.bots.length + (hostPool ? 0 : 1); // players drawing from the one shared pool
         if (per * sharers > src.length) {
           const k = room.bots.length;
-          throw new Error(`Not enough songs for ${k} test player${k === 1 ? '' : 's'}; lower Total songs or add fewer test players`);
+          throw new Error(`Not enough songs for ${k} test player${k === 1 ? '' : 's'}; lower Songs per person or add fewer test players`);
         }
         for (const b of room.bots) pools[b] = [...src];
       }

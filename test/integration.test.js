@@ -98,7 +98,7 @@ test('full game flow, permissions, reconnect, cleanup', async () => {
     // non-host is rejected in lobby (settings/start)
     const lobbySnap = t.snap(code);
     for (const type of ['start', 'settings']) {
-      jc.send({ type, settings: { total: 2 } });
+      jc.send({ type, settings: { perPerson: 2, buffer: 0 } });
       assert.match((await jc.err()).message, /host/i);
       assert.equal(t.snap(code), lobbySnap, type + ' changed state');
     }
@@ -108,10 +108,10 @@ test('full game flow, permissions, reconnect, cleanup', async () => {
     await jc.err();
     hc.send({ type: 'settings', settings: 'x' });
     await hc.err();
-    hc.send({ type: 'settings', settings: { total: -1 } });
+    hc.send({ type: 'settings', settings: { perPerson: -1 } });
     assert.match((await hc.err()).message, /Invalid setting/);
 
-    hc.send({ type: 'settings', settings: { total: 4, buffer: 1 } });
+    hc.send({ type: 'settings', settings: { perPerson: 2, buffer: 1 } });
     hc.send({ type: 'start' });
     const hr = await hc.phase('review');
     const jr = await jc.phase('review');
@@ -408,7 +408,7 @@ test('settings and joins are refused while starting', async () => {
     const state = await t.loginState(code);
     hc.send({ type: 'start' });
     await t.waitStarting(t.server.rooms.get(code));
-    hc.send({ type: 'settings', settings: { total: 6 } });
+    hc.send({ type: 'settings', settings: { perPerson: 3, buffer: 0 } });
     assert.match((await hc.err()).message, /starting/);
     const r = await t.callback('X', state);
     assert.equal(r.status, 409);
@@ -542,7 +542,7 @@ test('dev mode: solo host plays a full game with test players', async () => {
     for (let i = 0; i < 5; i++) hc.send({ type: 'removeBot' });
     await hc.until((m) => m.type === 'state' && m.view.players.length === 3);
 
-    hc.send({ type: 'settings', settings: { total: 6, buffer: 0 } });
+    hc.send({ type: 'settings', settings: { perPerson: 2, buffer: 0 } });
     hc.send({ type: 'start' });
     const rv = await hc.phase('review'); // only the host's pool was fetched
     assert.equal(rv.view.myTracks.length, 2);
@@ -607,7 +607,7 @@ test('dev: removeBot after start is refused and keeps state consistent', async (
     const { hc, room } = await devHost(t);
     hc.send({ type: 'addBot' });
     await players(hc, 2);
-    hc.send({ type: 'settings', settings: { total: 4, buffer: 0 } });
+    hc.send({ type: 'settings', settings: { perPerson: 2, buffer: 0 } });
     hc.send({ type: 'start' });
     await hc.phase('review');
     hc.send({ type: 'ready' });
@@ -654,7 +654,7 @@ test('dev: host who does not play can play with test players to the end', async 
     hc.send({ type: 'addBot' });
     hc.send({ type: 'addBot' });
     await players(hc, 3);
-    hc.send({ type: 'settings', settings: { total: 6, buffer: 0 } });
+    hc.send({ type: 'settings', settings: { perPerson: 3, buffer: 0 } });
     hc.send({ type: 'start' });
     await hc.phase('between');
     for (;;) {
@@ -680,7 +680,7 @@ test('dev: too few songs for the test players is a clear error', async () => {
     for (let i = 0; i < 3; i++) hc.send({ type: 'addBot' });
     await players(hc, 4);
     hc.send({ type: 'start' });
-    assert.match((await hc.err()).message, /Not enough songs for 3 test players; lower Total songs or add fewer test players/);
+    assert.match((await hc.err()).message, /Not enough songs for 3 test players; lower Songs per person or add fewer test players/);
     assert.equal(room.game.phase, 'lobby');
   } finally {
     await t.close();
@@ -743,7 +743,7 @@ test('dev: shortage check uses the real per-player count', async () => {
     hc.send({ type: 'addBot' });
     hc.send({ type: 'addBot' });
     await players(hc, 4);
-    hc.send({ type: 'settings', settings: { total: 40 } });
+    hc.send({ type: 'settings', settings: { perPerson: 25, buffer: 0 } });
     hc.send({ type: 'start' });
     await hc.phase('review'); // per player is 3, so 3 sharers need 9 of the host's 20 songs
   } finally {
@@ -851,7 +851,7 @@ test('round stays open a fixed 1100 ms past the nominal duration while a human c
   const t = await boot(300, { opts: { pingMs: 60000 } });
   try {
     const { hc, jc, code } = await pair(t);
-    hc.send({ type: 'settings', settings: { total: 2, buffer: 0 } });
+    hc.send({ type: 'settings', settings: { perPerson: 1, buffer: 0 } });
     hc.send({ type: 'start' });
     await hc.phase('review');
     hc.send({ type: 'ready' });
@@ -882,7 +882,7 @@ test('dev: rounds with only test players stay short (no grace)', async () => {
     hc.send({ type: 'addBot' });
     hc.send({ type: 'addBot' });
     await players(hc, 3);
-    hc.send({ type: 'settings', settings: { total: 2, buffer: 0 } });
+    hc.send({ type: 'settings', settings: { perPerson: 1, buffer: 0 } });
     hc.send({ type: 'start' });
     await hc.phase('between');
     const t0 = performance.now();
@@ -901,7 +901,7 @@ test('guesser who connects after Play still gets the fixed grace', async () => {
     const { hc, jc, j, code } = await pair(t);
     const kc = await t.connect((await t.login(code, 'K')).key);
     await kc.phase('lobby');
-    hc.send({ type: 'settings', settings: { total: 3, buffer: 0 } });
+    hc.send({ type: 'settings', settings: { perPerson: 1, buffer: 0 } });
     hc.send({ type: 'start' });
     await hc.phase('review');
     hc.send({ type: 'ready' });
@@ -937,7 +937,7 @@ test('high-rtt guess inside the grace window is accepted and scored from compens
     jw.msgs = [];
     jw.on('message', (d) => jw.msgs.push(JSON.parse(d)));
     await waitFor(() => serverSocket(t, code, 'J')?.rtt >= 290);
-    hc.send({ type: 'settings', settings: { total: 2, buffer: 0 } });
+    hc.send({ type: 'settings', settings: { perPerson: 1, buffer: 0 } });
     hc.send({ type: 'start' });
     await hc.phase('review');
     hc.send({ type: 'ready' });
@@ -951,6 +951,22 @@ test('high-rtt guess inside the grace window is accepted and scored from compens
     assert.ok(!jw.msgs.some((m) => m.type === 'error'), JSON.stringify(jw.msgs));
     const d = rev.view.reveal.deltas.J; // about 500 ms compensated of 600 -> about 583
     assert.ok(d >= 540 && d <= 610, `J scored ${d}`);
+  } finally {
+    await t.close();
+  }
+});
+
+test('default settings: review view carries keep/removalsLeft and players carry streak', async () => {
+  const t = await boot();
+  try {
+    const { hc } = await pair(t);
+    hc.send({ type: 'start' });
+    const v = (await hc.phase('review')).view;
+    assert.deepEqual(v.settings, { source: 'recents', perPerson: 4, buffer: 1, hostPlays: true });
+    assert.equal(v.myTracks.length, 4);
+    assert.equal(v.keep, 3);
+    assert.equal(v.removalsLeft, 1);
+    assert.ok(v.players.every((p) => p.streak === 0));
   } finally {
     await t.close();
   }

@@ -30,8 +30,10 @@ test('start splits songs and enters review', () => {
   const g = mk();
   g.start({ a: pool('a'), b: pool('b') });
   assert.equal(g.phase, 'review');
-  assert.equal(g.view('a').myTracks.length, 6);
-  assert.equal(g.view('b').myTracks.length, 6);
+  assert.equal(g.view('a').myTracks.length, 4);
+  assert.equal(g.view('b').myTracks.length, 4);
+  assert.equal(g.view('a').keep, 3);
+  assert.equal(g.view('a').removalsLeft, 1);
 });
 
 test('start throws on empty pool or <2 participants', () => {
@@ -48,21 +50,64 @@ test('hostPlays false ignores host pool', () => {
   g.configure({ hostPlays: false });
   g.start({ a: pool('a'), b: pool('b'), c: pool('c') });
   assert.equal(g.view('a').myTracks, undefined);
-  assert.equal(g.view('b').myTracks.length, 6);
+  assert.equal(g.view('b').myTracks.length, 4);
 });
 
-test('removals limited by buffer; 10 songs remain', () => {
+test('removals limited by buffer; everyone ends with keep songs', () => {
   const g = mk();
   g.start({ a: pool('a'), b: pool('b') });
-  const [t0, t1, t2] = g.view('a').myTracks;
+  const [t0, t1] = g.view('a').myTracks;
   g.removeTrack('a', t0.id);
-  g.removeTrack('a', t1.id);
-  assert.throws(() => g.removeTrack('a', t2.id));
+  assert.throws(() => g.removeTrack('a', t1.id), /No removals left/);
   assert.equal(g.view('a').removalsLeft, 0);
   g.setReady('a');
   assert.equal(g.setReady('b'), true);
   assert.equal(g.phase, 'between');
-  assert.equal(g.view('a').round.total, 10);
+  assert.equal(g.view('a').round.total, 6);
+  assert.deepEqual([g.tracks.a.length, g.tracks.b.length], [3, 3]); // b dropped one at random
+});
+
+test('mandatory removals: nobody removes anything -> keep each; queue is exact and duplicate free', () => {
+  const g = mk();
+  g.addPlayer('c', 'Cy');
+  g.start({ a: pool('a'), b: pool('b'), c: pool('c') });
+  for (const id of g.participants()) g.setReady(id);
+  assert.equal(g.phase, 'between');
+  assert.equal(g.queue.length, 9);
+  assert.equal(new Set(g.queue.map((q) => q.track.id)).size, 9);
+  for (const id of ['a', 'b', 'c']) assert.equal(g.queue.filter((q) => q.ownerId === id).length, 3);
+});
+
+test('perPerson larger than the pool: per is the pool size, keep follows the formula', () => {
+  const g = mk();
+  g.configure({ perPerson: 3, buffer: 1 });
+  g.start({ a: pool('a', 2), b: pool('b') }); // per = 2, effBuffer = min(1, 1) = 1, keep = 1
+  assert.equal(g.view('a').myTracks.length, 2);
+  assert.equal(g.view('a').keep, 1);
+  assert.equal(g.view('a').removalsLeft, 1);
+  g.setReady('a');
+  g.setReady('b');
+  assert.deepEqual([g.tracks.a.length, g.tracks.b.length], [1, 1]);
+});
+
+test('buffer 0: no removals, nothing dropped', () => {
+  const g = mk();
+  g.configure({ perPerson: 4, buffer: 0 });
+  g.start({ a: pool('a'), b: pool('b') });
+  assert.equal(g.view('a').keep, 4);
+  assert.equal(g.view('a').removalsLeft, 0);
+  assert.throws(() => g.removeTrack('a', g.view('a').myTracks[0].id), /No removals left/);
+  g.setReady('a');
+  g.setReady('b');
+  assert.deepEqual([g.tracks.a.length, g.tracks.b.length], [4, 4]);
+});
+
+test('mandatory drops also apply when a disconnected player never readied', () => {
+  const g = mk();
+  g.start({ a: pool('a'), b: pool('b') });
+  g.setConnected('b', false);
+  assert.equal(g.setReady('a'), true);
+  assert.deepEqual([g.tracks.a.length, g.tracks.b.length], [3, 3]);
 });
 
 test('setReady true only when all ready', () => {
@@ -113,7 +158,7 @@ test('late guess rejected; wrong guess scores 0', () => {
 test('next after last round finishes', () => {
   const g = mk();
   toBetween(g);
-  for (let i = 0; i < 12; i++) {
+  for (let i = 0; i < 6; i++) {
     assert.equal(g.phase, 'between');
     g.beginRound();
     g.endRound();
@@ -136,18 +181,21 @@ test('configure validates input atomically', () => {
   const g = mk();
   const before = JSON.stringify(g.settings);
   for (const bad of [
-    { total: NaN }, { total: 0 }, { total: 101 }, { total: 1.5 }, { total: '12' },
+    { perPerson: NaN }, { perPerson: 0 }, { perPerson: 26 }, { perPerson: 1.5 }, { perPerson: '4' },
     { buffer: -1 }, { buffer: 21 }, { buffer: 1.5 }, { hostPlays: 'false' },
-    { source: 'x' }, { total: 10, buffer: -1 },
+    { source: 'x' }, { perPerson: 10, buffer: -1 }, { perPerson: 3, buffer: 3 }, { buffer: 4 },
   ]) {
     assert.throws(() => g.configure(bad), Error, JSON.stringify(bad));
     assert.equal(JSON.stringify(g.settings), before);
   }
-  g.configure({ total: 10, buffer: 0, hostPlays: false, source: 'liked', evil: 1 });
-  assert.deepEqual(g.settings, { source: 'liked', total: 10, buffer: 0, hostPlays: false });
+  g.configure({ perPerson: 10, buffer: 0, hostPlays: false, source: 'liked', evil: 1, total: 99 });
+  assert.deepEqual(g.settings, { source: 'liked', perPerson: 10, buffer: 0, hostPlays: false });
+  g.configure({ buffer: 3 });
+  g.configure({ perPerson: 2, buffer: 1 }); // valid together although the old buffer was 3
+  assert.deepEqual([g.settings.perPerson, g.settings.buffer], [2, 1]);
   const h = mk();
   h.start({ a: pool('a'), b: pool('b') });
-  assert.throws(() => h.configure({ total: 5 }));
+  assert.throws(() => h.configure({ perPerson: 5 }));
 });
 
 test('disconnected participant does not block readiness', () => {
@@ -176,26 +224,11 @@ test('nobody connected and ready does not advance', () => {
   assert.equal(g.checkReady(), false);
 });
 
-test('cannot remove the last song', () => {
-  const g = mk();
-  g.configure({ total: 2, buffer: 5 });
-  g.start({ a: pool('a'), b: pool('b') });
-  assert.throws(() => g.removeTrack('a', g.view('a').myTracks[0].id), /Keep at least one song/);
-});
-
 test('equal split after de-duplication of shared tracks', () => {
   const g = mk();
   g.start({ a: pool('s', 8), b: pool('s', 8) });
   assert.equal(g.view('a').myTracks.length, g.view('b').myTracks.length);
   assert.ok(g.view('a').myTracks.length >= 1);
-});
-
-test('total too small for participants throws clear error', () => {
-  const g = mk();
-  g.addPlayer('c', 'Cy');
-  g.addPlayer('d', 'Di');
-  g.configure({ total: 3 });
-  assert.throws(() => g.start({ a: pool('a'), b: pool('b'), c: pool('c'), d: pool('d') }), /Need at least 1 song per player; raise Total songs/);
 });
 
 test('addPlayer rejects a duplicate id', () => {
@@ -303,4 +336,101 @@ test('round timing does not depend on the wall clock', async () => {
   }
   const d = g.view(owner).reveal.deltas[guesser];
   assert.ok(d >= 700 && d <= 800, `scored ${d}`); // about 200 of 400 ms elapsed
+});
+
+// streaks: display only
+const game3 = (hostPlays = true) => {
+  clock = 0;
+  const g = new Game({ now: () => clock, rng: () => 0.5 });
+  g.addPlayer('a', 'Ann', true);
+  g.addPlayer('b', 'Bob');
+  g.addPlayer('c', 'Cy');
+  g.configure({ perPerson: 4, buffer: 0, hostPlays });
+  g.start({ a: pool('a'), b: pool('b'), c: pool('c') });
+  for (const id of g.participants()) g.setReady(id);
+  return g;
+};
+const playRound = (g, answer, pre = {}) => { // answer: 'right' | 'wrong' | 'none' for every guesser
+  g.beginRound();
+  const owner = g.queue[g.round].ownerId;
+  for (const [id, v] of Object.entries(pre)) g.players.get(id).streak = v;
+  const before = Object.fromEntries([...g.players].map(([id, p]) => [id, p.streak]));
+  const guessers = [...g.players.keys()].filter((id) => g.guessProblem(id) === null);
+  for (const id of guessers) if (answer !== 'none') g.guess(id, answer === 'right' ? owner : 'zz');
+  g.endRound();
+  const after = Object.fromEntries([...g.players].map(([id, p]) => [id, p.streak]));
+  g.next();
+  return { owner, guessers, before, after, g };
+};
+
+test('streaks: correct increments, wrong and no guess reset, owner unchanged', () => {
+  const g = game3();
+  let r = playRound(g, 'right');
+  for (const id of r.guessers) assert.equal(r.after[id], r.before[id] + 1);
+  assert.equal(r.after[r.owner], r.before[r.owner]);
+  r = playRound(g, 'right');
+  for (const id of r.guessers) assert.equal(r.after[id], r.before[id] + 1);
+  r = playRound(g, 'wrong');
+  for (const id of r.guessers) assert.equal(r.after[id], 0);
+  r = playRound(g, 'right');
+  r = playRound(g, 'none');
+  for (const id of r.guessers) assert.equal(r.after[id], 0);
+  assert.equal(r.after[r.owner], r.before[r.owner]);
+});
+
+test('streaks: two correct in a row gives 2', () => {
+  const g = game3();
+  playRound(g, 'right');
+  const r = playRound(g, 'right');
+  assert.ok(Object.values(r.after).includes(2));
+});
+
+test('streaks: owner keeps an old streak of 0 or 3', () => {
+  for (const old of [0, 3]) {
+    const g = game3();
+    g.beginRound();
+    const owner = g.queue[g.round].ownerId;
+    g.endRound();
+    g.next();
+    for (let i = 0; i < 12; i++) { // advance to another round of the same owner
+      g.beginRound();
+      const mine = g.queue[g.round].ownerId === owner;
+      if (mine) g.players.get(owner).streak = old;
+      g.endRound();
+      if (mine) { assert.equal(g.players.get(owner).streak, old); break; }
+      g.next();
+    }
+  }
+});
+
+test('streaks: non-playing host never gets one; disconnected non-guesser resets', () => {
+  const g = game3(false);
+  g.players.get('a').streak = 2;
+  let r = playRound(g, 'right');
+  assert.equal(r.after.a, 2);
+  assert.ok(!r.guessers.includes('a'));
+  const h = game3();
+  h.setConnected('b', false);
+  r = playRound(h, 'none', { b: 3 });
+  if (r.guessers.includes('b')) assert.equal(r.after.b, 0);
+  else assert.equal(r.after.b, 3);
+});
+
+test('streak is in every player view and scoring is unchanged', () => {
+  const g = game3();
+  assert.ok(g.view('a').players.every((p) => Number.isInteger(p.streak) && p.streak >= 0));
+  g.beginRound();
+  const owner = g.queue[g.round].ownerId;
+  const [x, y] = [...g.players.keys()].filter((id) => id !== owner);
+  clock = 5000;
+  g.guess(x, owner);
+  clock = 10000;
+  g.guess(y, 'zz');
+  assert.equal(g.view(x).players.find((p) => p.id === x).streak, 0); // nothing leaks before endRound
+  g.endRound();
+  const d = g.view(x).reveal.deltas;
+  assert.equal(d[x], 875);
+  assert.equal(d[y], 0);
+  assert.equal(d[owner], 0);
+  assert.equal(g.view(x).players.find((p) => p.id === x).streak, 1);
 });

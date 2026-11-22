@@ -74,12 +74,14 @@ Permanent: create a named tunnel and route `guesssong.mang0.uk` to `http://local
 ## How to play
 
 1. One person creates a room and shares the 4-letter room code. Everyone logs in with Spotify and joins.
-2. The host sets: song source (recents or liked), total songs (1-100), removals per player (0-20), and whether the host plays (guesses) too.
-3. Start the game. Players may remove some of their own songs (up to the removal limit, not replaced) and then ready up.
+2. The host sets: song source (recents or liked), songs per person (1-25, default 4), removals per person (default 1, always fewer than songs per person), and whether the host plays (guesses) too.
+3. Start the game. Everyone is dealt the same number of songs (songs per person, or the smallest pool if that is lower). Each player may remove up to the removal limit of their own songs and then readies up. Removals are mandatory: everyone ends with songs per person minus removals (default 4 songs, 1 removal = 3 each). Anyone who removed fewer has random songs dropped when the game starts. Removed songs are not replaced.
 4. Each round lasts 20 seconds. The host's device plays the song; everyone else guesses whose it is. The song's owner does not guess their own song.
 5. A correct guess scores 1000 down to 500 by speed; wrong or no guess scores 0. After each round you see the reveal and scoreboard.
 
-Songs per player = min(floor(total / players), smallest player pool).
+Songs dealt per player = min(songs per person, smallest player pool after removing duplicates); each player keeps that minus the removals.
+
+Streaks: players with 2 or more correct guesses in a row get a 🔥 next to their name. Wrong or missing guesses reset it; the song's owner and a non-playing host keep their streak. Streaks are display only and never change scoring.
 
 ## Releasing
 

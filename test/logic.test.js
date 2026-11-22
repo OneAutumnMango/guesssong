@@ -11,10 +11,10 @@ test('scoreFor', () => {
 });
 
 test('perPlayerCount', () => {
-  assert.equal(perPlayerCount(12, 3, [50, 50, 50]), 4);
-  assert.equal(perPlayerCount(12, 5, [50, 50, 50, 50, 50]), 2);
-  assert.equal(perPlayerCount(12, 3, [50, 2, 50]), 2);
-  assert.equal(perPlayerCount(12, 3, [50, 0, 50]), 0);
+  assert.equal(perPlayerCount(4, [50, 50, 50]), 4);
+  assert.equal(perPlayerCount(4, [50, 2, 50]), 2);
+  assert.equal(perPlayerCount(25, [50, 30]), 25);
+  assert.equal(perPlayerCount(4, [50, 0, 50]), 0);
 });
 
 const t = (id) => ({ id, uri: 'spotify:track:' + id, title: id, artist: 'a' });

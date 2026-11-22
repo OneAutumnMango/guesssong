@@ -9,7 +9,7 @@ export class Game {
     this.rng = rng;
     this.durationMs = durationMs;
     this.phase = 'lobby';
-    this.settings = { source: 'recents', total: 12, buffer: 2, hostPlays: true };
+    this.settings = { source: 'recents', perPerson: 4, buffer: 1, hostPlays: true };
     this.hostId = null;
     this.deadline = null;
     this.players = new Map(); // id -> { id, name, connected, score }
@@ -17,6 +17,8 @@ export class Game {
     this.queue = [];
     this.tracks = {}; // review: playerId -> Track[]
     this.removals = {};
+    this.effBuffer = 0; // removals allowed after capping to the pool
+    this.keep = 0; // songs every participant ends with
     this.ready = new Set();
     this.guesses = new Map(); // playerId -> { id, elapsed }
     this.roundStart = null;
@@ -27,7 +29,7 @@ export class Game {
     if (this.phase !== 'lobby') throw new Error('Game already started');
     if (this.players.has(id)) throw new Error('Player already in room');
     if (this.players.size >= MAX_PLAYERS) throw new Error('Room is full');
-    this.players.set(id, { id, name, connected: true, score: 0, bot });
+    this.players.set(id, { id, name, connected: true, score: 0, streak: 0, bot });
     if (isHost) this.hostId = id;
   }
 
@@ -45,7 +47,7 @@ export class Game {
     if (this.phase !== 'lobby') throw new Error('Settings are locked');
     const ok = {
       source: (v) => v === 'recents' || v === 'liked',
-      total: (v) => Number.isInteger(v) && v >= 1 && v <= 100,
+      perPerson: (v) => Number.isInteger(v) && v >= 1 && v <= 25,
       buffer: (v) => Number.isInteger(v) && v >= 0 && v <= 20,
       hostPlays: (v) => typeof v === 'boolean',
     };
@@ -55,6 +57,8 @@ export class Game {
       if (!ok[k](s[k])) throw new Error(`Invalid setting: ${k}`);
       next[k] = s[k];
     }
+    const merged = { ...this.settings, ...next }; // validate the merged result so perPerson and buffer can change together
+    if (merged.buffer >= merged.perPerson) throw new Error('Invalid setting: buffer');
     Object.assign(this.settings, next);
   }
 
@@ -71,8 +75,7 @@ export class Game {
       if (!pools[id]?.length) throw new Error(`${this.players.get(id).name} has no songs`);
       own[id] = pools[id];
     }
-    const per = perPlayerCount(this.settings.total, ids.length, ids.map((id) => own[id].length));
-    if (per < 1) throw new Error('Need at least 1 song per player; raise Total songs');
+    const per = perPlayerCount(this.settings.perPerson, ids.map((id) => own[id].length));
     const picked = pickTracks(own, per, this.rng);
     for (const id of ids) {
       if (!picked[id].length) throw new Error(`${this.players.get(id).name} has no songs`);
@@ -82,6 +85,8 @@ export class Game {
       picked[id] = picked[id].slice(0, least);
       this.removals[id] = 0;
     }
+    this.effBuffer = Math.min(this.settings.buffer, least - 1);
+    this.keep = least - this.effBuffer; // everyone ends with exactly this many songs
     this.tracks = picked;
     this.phase = 'review';
   }
@@ -90,7 +95,7 @@ export class Game {
     if (this.phase !== 'review') throw new Error('Not in review');
     const mine = this.tracks[playerId];
     if (!mine) throw new Error('Not a participant');
-    if (this.removals[playerId] >= this.settings.buffer) throw new Error('No removals left');
+    if (this.removals[playerId] >= this.effBuffer) throw new Error('No removals left');
     const i = mine.findIndex((t) => t.id === trackId);
     if (i < 0) throw new Error('Unknown track');
     if (mine.length <= 1) throw new Error('Keep at least one song');
@@ -111,6 +116,10 @@ export class Game {
     if (!ids.every((id) => this.ready.has(id) || !this.players.get(id).connected)) return false;
     const humans = ids.filter((id) => !this.players.get(id).bot); // test players must not start review on their own
     if (!(humans.length ? humans : ids).some((id) => this.ready.has(id) && this.players.get(id).connected)) return false;
+    for (const id of this.participants()) { // mandatory removals: drop random extras down to `keep`
+      const mine = this.tracks[id];
+      while (mine.length > this.keep) mine.splice(Math.floor(this.rng() * mine.length), 1);
+    }
     const q = Object.entries(this.tracks).flatMap(([ownerId, ts]) => ts.map((track) => ({ ownerId, track })));
     if (!q.length) throw new Error('No songs left');
     for (let i = q.length - 1; i > 0; i--) {
@@ -167,6 +176,11 @@ export class Game {
     if (this.phase !== 'playing') throw new Error('Not playing');
     const { ownerId } = this.queue[this.round];
     for (const id of this.players.keys()) this.deltas[id] = 0;
+    for (const id of this.#guessers()) { // display-only streaks; owner and non-playing host are left unchanged
+      const g = this.guesses.get(id);
+      const p = this.players.get(id);
+      p.streak = g && g.id === ownerId ? p.streak + 1 : 0;
+    }
     for (const [id, g] of this.guesses) {
       const d = scoreFor(g.id === ownerId, g.elapsed, this.durationMs);
       this.deltas[id] = d;
@@ -192,7 +206,8 @@ export class Game {
     };
     if (this.phase === 'review' && this.tracks[playerId]) {
       v.myTracks = this.tracks[playerId];
-      v.removalsLeft = this.settings.buffer - this.removals[playerId];
+      v.removalsLeft = this.effBuffer - this.removals[playerId];
+      v.keep = this.keep;
     }
     if (['between', 'playing', 'reveal'].includes(this.phase)) {
       v.round = { index: this.round, total: this.queue.length, remainingMs: this.deadline == null ? null : Math.max(0, this.deadline - this.now()), guessedCount: this.guesses.size };
