@@ -36,7 +36,19 @@ export class Game {
 
   configure(s) {
     if (this.phase !== 'lobby') throw new Error('Settings are locked');
-    Object.assign(this.settings, s);
+    const ok = {
+      source: (v) => v === 'recents' || v === 'liked',
+      total: (v) => Number.isInteger(v) && v >= 1 && v <= 100,
+      buffer: (v) => Number.isInteger(v) && v >= 0 && v <= 20,
+      hostPlays: (v) => typeof v === 'boolean',
+    };
+    const next = {};
+    for (const k of Object.keys(ok)) {
+      if (!s || !(k in s)) continue;
+      if (!ok[k](s[k])) throw new Error(`Invalid setting: ${k}`);
+      next[k] = s[k];
+    }
+    Object.assign(this.settings, next);
   }
 
   participants() {

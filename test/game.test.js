@@ -131,3 +131,21 @@ test('host with hostPlays false cannot guess', () => {
   g.beginRound();
   assert.equal(g.guess('a', 'b'), false);
 });
+
+test('configure validates input atomically', () => {
+  const g = mk();
+  const before = JSON.stringify(g.settings);
+  for (const bad of [
+    { total: NaN }, { total: 0 }, { total: 101 }, { total: 1.5 }, { total: '12' },
+    { buffer: -1 }, { buffer: 21 }, { buffer: 1.5 }, { hostPlays: 'false' },
+    { source: 'x' }, { total: 10, buffer: -1 },
+  ]) {
+    assert.throws(() => g.configure(bad), Error, JSON.stringify(bad));
+    assert.equal(JSON.stringify(g.settings), before);
+  }
+  g.configure({ total: 10, buffer: 0, hostPlays: false, source: 'liked', evil: 1 });
+  assert.deepEqual(g.settings, { source: 'liked', total: 10, buffer: 0, hostPlays: false });
+  const h = mk();
+  h.start({ a: pool('a'), b: pool('b') });
+  assert.throws(() => h.configure({ total: 5 }));
+});
