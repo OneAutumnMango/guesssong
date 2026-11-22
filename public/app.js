@@ -153,6 +153,7 @@
     if (!embedStarted) { embedStarted = true; pendingUri = view.nextUri || null; loadEmbedScript(); }
     const show = fallback && view.phase === 'between' && !apiFailed;
     setEmbedVisible(show || (view.phase === 'reveal' && !apiFailed));
+    $('embed-wrap').style.order = $('embed-note').style.order = view.phase === 'reveal' ? 15 : 1000; // mobile: under the reveal text
     const note = $('embed-note');
     note.hidden = !(apiFailed || show);
     note.textContent = apiFailed
@@ -289,7 +290,9 @@
 
   let reviewLis = new Map();
   function reviewHeader() {
-    return 'You must keep ' + view.keep + ' songs. Remove up to ' + (view.removalsLeft || 0) + ' more (if you do not, we drop the extras at random).';
+    const left = view.removalsLeft || 0;
+    if (!Number.isFinite(view.keep)) return 'Remove up to ' + left + ' songs.';
+    return 'You must keep ' + view.keep + ' songs. Remove up to ' + left + ' more (if you do not, we drop the extras at random).';
   }
   function trackLi(t, i) {
     const f = spotifyFrame(t.id, 'Your song ' + (i + 1));
@@ -352,57 +355,76 @@
     return [roundHeader(), el('p', { class: 'big', text: 'Get ready' })];
   }
 
-  function playing() {
-    const out = [roundHeader()];
-    const cd = el('p', { class: 'big', id: 'countdown' });
-    out.push(cd);
-    timeUp = false; guessBtns = [];
-    const upd = () => {
-      if (localDeadline === null) { cd.textContent = ''; return; }
-      const ms = Math.max(0, localDeadline - performance.now());
-      if (ms === 0) { timeUp = true; cd.textContent = 'Time is up'; for (const b of guessBtns) b.disabled = true; }
-      else cd.textContent = Math.ceil(ms / 1000) + 's';
-    };
-    if (isHost()) {
-      out.push(el('p', { id: 'audio-status', class: 'muted', text: audioStarted ? 'Playing' : 'Waiting for audio…' }),
-        el('progress', { id: 'audio-progress', max: audioDur || 1, value: Math.min(audioPos, audioDur || 1), 'aria-label': 'Playback progress' }));
-    }
-    seeking = false;
-    if (isHost() && controller) {
-      const call = (n, ...a) => { if (typeof controller[n] === 'function') { controller[n](...a); return true; } return false; };
-      const toggle = btn(audioStarted ? 'Pause' : 'Resume', () => {
-        if (audioStarted) call('pause') || call('togglePlay'); else call('resume') || call('togglePlay');
-      }, 'secondary', 'audio-toggle');
-      toggle.id = 'audio-toggle';
-      const seek = el('input', { id: 'audio-seek', type: 'range', min: 0, max: Math.max(1, Math.floor(audioDur / 1000)), step: 1, value: Math.floor(audioPos / 1000) });
-      seek.addEventListener('input', () => { seeking = true; });
-      seek.addEventListener('change', () => { seeking = false; call('seek', Number(seek.value)); });
-      out.push(toggle, el('label', { htmlFor: 'audio-seek', text: 'Seek' }), seek,
-        el('p', { class: 'muted', text: 'The round timer keeps running while paused.' }));
-    }
+  let playRound = -1;
+  function updCountdown() {
+    const cd = $('countdown');
+    if (!cd) return;
+    if (localDeadline === null) { cd.textContent = ''; return; }
+    const ms = Math.max(0, localDeadline - performance.now());
+    if (ms === 0) { timeUp = true; cd.textContent = 'Time is up'; for (const b of guessBtns) b.disabled = true; }
+    else cd.textContent = Math.ceil(ms / 1000) + 's';
+  }
+
+  function hostControls() {
+    const call = (n, ...a) => { if (typeof controller[n] === 'function') { controller[n](...a); return true; } return false; };
+    const toggle = btn(audioStarted ? 'Pause' : 'Resume', () => {
+      if (audioStarted) call('pause') || call('togglePlay'); else call('resume') || call('togglePlay');
+    }, 'secondary', 'audio-toggle');
+    toggle.id = 'audio-toggle';
+    const seek = el('input', { id: 'audio-seek', type: 'range', min: 0, max: Math.max(1, Math.floor(audioDur / 1000)), step: 1, value: Math.floor(audioPos / 1000) });
+    seek.addEventListener('input', () => { seeking = true; });
+    seek.addEventListener('change', () => { seeking = false; call('seek', Number(seek.value)); });
+    return [toggle, el('label', { htmlFor: 'audio-seek', text: 'Seek' }), seek,
+      el('p', { class: 'muted', text: 'The round timer keeps running while paused.' })];
+  }
+
+  // updates only what changed; the host's slider/progress nodes and a seek drag survive broadcasts
+  function syncPlaying() {
+    const hc = $('host-controls');
+    if (hc && controller && !hc.firstChild) hc.append(...hostControls());
+    const slot = $('play-slot');
     const iAmGuesser = view.settings.hostPlays || !isHost();
-    if (!iAmGuesser) {
-      out.push(el('p', { text: 'Hosting' }), el('p', { class: 'muted', text: 'Guessed: ' + view.round.guessedCount }));
-    } else if (view.iOwnThisSong) {
-      out.push(el('p', { text: 'This one is yours! Sit this round out while the others guess.' }));
-    } else if (view.myGuess) {
-      out.push(el('p', { class: 'big', text: 'Locked in' }));
-    } else {
-      out.push(el('h2', { text: 'Whose song is this?' }));
-      const grid = el('div', { class: 'guess-grid' });
-      out.push(grid);
-      for (const p of view.players) {
-        if (p.id === view.you || (!view.settings.hostPlays && p.id === view.hostId)) continue;
-        const b = btn(tag(p), () => { guessPending = true; for (const x of guessBtns) x.disabled = true; send({ type: 'guess', playerId: p.id }); }, '', 'guess-' + p.id);
-        b.disabled = guessPending;
-        guessBtns.push(b);
-        grid.append(b);
+    const opts = view.players.filter((p) => !(p.id === view.you || (!view.settings.hostPlays && p.id === view.hostId)));
+    const variant = !iAmGuesser ? 'host' : view.iOwnThisSong ? 'owner' : view.myGuess ? 'locked' : 'guess';
+    const sig = variant + (variant === 'guess' ? ':' + opts.map((p) => p.id + '=' + tag(p)).join(',') : '');
+    if (slot.dataset.sig !== sig) {
+      slot.dataset.sig = sig;
+      guessBtns = [];
+      if (variant === 'host') {
+        slot.replaceChildren(el('p', { text: 'Hosting' }), el('p', { id: 'guessed-count', class: 'muted' }));
+      } else if (variant === 'owner') {
+        slot.replaceChildren(el('p', { text: 'This one is yours! Sit this round out while the others guess.' }));
+      } else if (variant === 'locked') {
+        slot.replaceChildren(el('p', { class: 'big', text: 'Locked in' }));
+      } else {
+        const grid = el('div', { class: 'guess-grid' });
+        for (const p of opts) {
+          const b = btn(tag(p), () => { guessPending = true; for (const x of guessBtns) x.disabled = true; send({ type: 'guess', playerId: p.id }); }, '', 'guess-' + p.id);
+          guessBtns.push(b);
+          grid.append(b);
+        }
+        slot.replaceChildren(el('h2', { text: 'Whose song is this?' }), grid);
       }
     }
-    out.push(scoreboard());
-    upd(); tick = setInterval(upd, 250);
+    if (variant === 'guess') for (const b of guessBtns) b.disabled = guessPending || timeUp;
+    const gc = $('guessed-count');
+    if (gc) gc.textContent = 'Guessed: ' + view.round.guessedCount;
+  }
+
+  function playing() {
+    const out = [roundHeader(), el('p', { class: 'big', id: 'countdown' })];
+    timeUp = false; guessBtns = []; seeking = false; playRound = view.round.index;
+    if (isHost()) {
+      out.push(el('p', { id: 'audio-status', class: 'muted', text: audioStarted ? 'Playing' : 'Waiting for audio…' }),
+        el('progress', { id: 'audio-progress', max: audioDur || 1, value: Math.min(audioPos, audioDur || 1), 'aria-label': 'Playback progress' }),
+        el('div', { id: 'host-controls' }));
+    }
+    out.push(el('div', { id: 'play-slot' }), scoreboard());
+    pendingPlaySync = true;
+    tick = setInterval(updCountdown, 250);
     return out;
   }
+  let pendingPlaySync = false;
 
   let prevStreak = 0, streakRound = -1, streakLost = false;
   function reveal() {
@@ -439,13 +461,15 @@
   // two columns on desktop (CSS), single column on mobile; inline order keeps the original DOM order there
   function layout(kids) {
     const main = el('div', { class: 'main-col' }), side = el('div', { class: 'side-col' });
-    kids.forEach((k, i) => { k.style.order = i; (k.classList.contains('side') ? side : main).append(k); });
+    kids.forEach((k, i) => { k.style.order = i * 10; (k.classList.contains('side') ? side : main).append(k); });
     return el('div', { class: 'layout' }, main, side);
   }
 
   function render() {
     if (view.phase === 'review' && lastPhase === 'review' && $('review-list')) {
       syncReview();
+    } else if (view.phase === 'playing' && lastPhase === 'playing' && playRound === view.round.index && $('play-slot')) {
+      syncPlaying(); refreshScoreboard(); updCountdown();
     } else if (view.phase === 'reveal' && lastPhase === 'reveal' && $('reveal-card') && $('reveal-card').dataset.round === String(view.round.index)) {
       refreshScoreboard();
     } else if (view.phase === 'lobby' && lastPhase === 'lobby' && $('lobby-players')) {
@@ -465,6 +489,7 @@
       const f = phases[view.phase];
       app.replaceChildren(layout(f ? f() : [el('p', { text: 'Unknown state' })]));
       if (pendingReviewSync) { pendingReviewSync = false; syncReview(); }
+      if (pendingPlaySync) { pendingPlaySync = false; syncPlaying(); updCountdown(); }
       if (fk) {
         const t = [...app.querySelectorAll('[data-focus],[id]')].find((x) => (x.dataset.focus || x.id) === fk);
         if (t) t.focus();
