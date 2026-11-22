@@ -64,15 +64,15 @@
 **Security flag:** `none`
 **Does NOT cover:** nothing beyond the three functions above.
 
-- [ ] **Step 1: Write failing tests** in `test/logic.test.js`
+- [x] **Step 1: Write failing tests** in `test/logic.test.js`
   - `scoreFor(true, 0) === 1000`, `scoreFor(true, 10000) === 750`, `scoreFor(true, 20000) === 500`, `scoreFor(true, 99999) === 500`, `scoreFor(false, 0) === 0`
   - `perPlayerCount(12, 3, [50, 50, 50]) === 4`, `perPlayerCount(12, 5, [50,50,50,50,50]) === 2`, `perPlayerCount(12, 3, [50, 2, 50]) === 2`, `perPlayerCount(12, 3, [50, 0, 50]) === 0`
   - `pickTracks`: each player gets exactly `perPlayer` tracks, all from their own pool, and no track id is repeated across players even when two pools share a track.
   - `pickTracks` with a pool smaller than `perPlayer` (after de-duplication) returns the shorter list for that player and does not throw.
-- [ ] **Step 2:** Run `npm test`. Expected: FAIL (module not found).
-- [ ] **Step 3: Implement** the three functions in `src/logic.js`. Create `package.json` (`"type": "module"`, `"scripts": {"test": "node --test"}`, dependency `ws`), then run `npm install`. For `pickTracks`, shuffle each pool with `rng` (Fisher-Yates), then take tracks per player in order, skipping any id already taken.
-- [ ] **Step 4:** Run `npm test`. Expected: PASS.
-- [ ] **Step 5: Commit** `git add package.json package-lock.json src/logic.js test/logic.test.js .gitignore && git commit -m "Add scoring, split and pick logic"` (confirm `.gitignore` contains `node_modules`).
+- [x] **Step 2:** Run `npm test`. Expected: FAIL (module not found).
+- [x] **Step 3: Implement** the three functions in `src/logic.js`. Create `package.json` (`"type": "module"`, `"scripts": {"test": "node --test"}`, dependency `ws`), then run `npm install`. For `pickTracks`, shuffle each pool with `rng` (Fisher-Yates), then take tracks per player in order, skipping any id already taken.
+- [x] **Step 4:** Run `npm test`. Expected: PASS.
+- [x] **Step 5: Commit** `git add package.json package-lock.json src/logic.js test/logic.test.js .gitignore && git commit -m "Add scoring, split and pick logic"` (confirm `.gitignore` contains `node_modules`).
 
 ---
 
