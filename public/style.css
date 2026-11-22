@@ -86,3 +86,9 @@ body.game #app, body.game .layout, body.game .main-col, body.game .side-col { di
   body.game .guess-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
   body.game .guess-grid button { margin: 0; min-height: 72px; }
 }
+
+/* host music control: one line, icon + slider + time */
+.music-row { display: flex; flex-wrap: nowrap; align-items: center; gap: 12px; }
+.music-row .icon-btn { flex: none; width: 48px; height: 48px; min-height: 48px; margin: 0; padding: 0; display: flex; align-items: center; justify-content: center; border-radius: 50%; }
+.music-row input[type=range] { flex: 1 1 auto; min-width: 0; width: auto; margin: 0; }
+.music-time { flex: none; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--muted); }

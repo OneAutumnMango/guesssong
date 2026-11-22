@@ -133,13 +133,26 @@
   }
   function sendPause() { if (timed() && !pausedIntent) { pausedIntent = true; send({ type: 'pause' }); } }
   function sendResume() { if (timed() && pausedIntent) { pausedIntent = false; send({ type: 'resume' }); } }
+  const timeText = () => fmt(audioPos) + ' / ' + (audioDur ? fmt(audioDur) : '--:--');
+  const spoken = () => Math.floor(audioPos / 1000) + ' seconds' + (audioDur ? ' of ' + Math.floor(audioDur / 1000) : '');
+  // icon-only toggle: inline SVG built with DOM APIs
+  function setIcon(b, kind, label) {
+    const NS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('width', '24'); svg.setAttribute('height', '24');
+    svg.setAttribute('aria-hidden', 'true'); svg.setAttribute('fill', 'currentColor');
+    const p = document.createElementNS(NS, 'path');
+    p.setAttribute('d', kind === 'pause' ? 'M6 5h4v14H6zM14 5h4v14h-4z' : 'M7 4.5v15l13-7.5z');
+    svg.append(p);
+    b.replaceChildren(svg);
+    b.setAttribute('aria-label', label);
+  }
   function updateAudioUi() {
     const tg = $('audio-toggle');
-    if (tg) tg.textContent = audioPlaying ? 'Pause' : 'Resume';
+    if (tg) setIcon(tg, audioPlaying ? 'pause' : 'play', audioPlaying ? 'Pause' : 'Resume');
     const sk = $('audio-seek'), tm = $('audio-time');
-    const text = fmt(audioPos) + ' / ' + fmt(audioDur);
-    if (tm) tm.textContent = text;
-    if (sk && !seeking) { sk.max = Math.max(1, Math.floor(audioDur / 1000)); sk.value = Math.floor(audioPos / 1000); sk.setAttribute('aria-valuetext', text); }
+    if (tm) tm.textContent = timeText();
+    if (sk && !seeking) { sk.max = Math.max(1, Math.floor(audioDur / 1000)); sk.value = Math.floor(audioPos / 1000); sk.setAttribute('aria-valuetext', spoken()); }
   }
   function onPlayback(e) {
     const d = (e && e.data) || {};
@@ -405,19 +418,23 @@
   // the host's single "Now playing" card: Play (between) or Pause/seek/time (playing); reveal uses the embed itself
   function playCard() {
     const starting = playClicked && !fallback && !playSent;
-    const b = btn('Play', () => {
+    const b = btn('', () => {
       if (apiFailed || !controller) { showError('The Spotify player is not ready yet.'); return; }
       // same user gesture: start audio here; the round starts when the embed reports sound
       playClicked = true; fallback = false; playSent = false; slowLoad = false; clickAt = performance.now();
       try { controller.play(); } catch (e) { showError('Could not start the player.'); }
       startWatch();
       render();
-    }, '', 'Play');
+    }, 'icon-btn', 'Play');
+    setIcon(b, 'play', 'Play');
     b.disabled = starting || apiFailed;
+    const seek = el('input', { id: 'between-seek', type: 'range', min: 0, max: 1, step: 1, value: 0, disabled: true, 'aria-label': 'Seek' });
     const msg = apiFailed ? 'The Spotify player failed to load, so audio cannot start. Reload the page or check for an ad blocker.'
       : starting ? 'Starting audio…'
       : slowLoad ? 'Spotify is slow to load. Press Play to try again.' : '';
-    return el('section', { id: 'now-playing' }, el('h2', { text: 'Now playing' }), b, msg ? el('p', { class: 'muted', text: msg }) : null);
+    return el('section', { id: 'now-playing' }, el('h2', { text: 'Now playing' }),
+      el('div', { class: 'music-row' }, b, seek, el('span', { class: 'music-time', text: '0:00 / --:--' })),
+      msg ? el('p', { class: 'muted', text: msg }) : null);
   }
 
   function between() {
@@ -441,14 +458,16 @@
 
   function hostControls() {
     const call = (n, ...a) => { if (typeof controller[n] === 'function') { controller[n](...a); return true; } return false; };
-    const toggle = btn(audioPlaying ? 'Pause' : 'Resume', () => {
+    const toggle = btn('', () => {
       if (audioPlaying) { call('pause') || call('togglePlay'); sendPause(); } else { call('resume') || call('togglePlay'); sendResume(); }
-    }, 'secondary', 'audio-toggle');
+    }, 'icon-btn', 'audio-toggle');
     toggle.id = 'audio-toggle';
+    setIcon(toggle, audioPlaying ? 'pause' : 'play', audioPlaying ? 'Pause' : 'Resume');
     const seek = el('input', { id: 'audio-seek', type: 'range', min: 0, max: Math.max(1, Math.floor(audioDur / 1000)), step: 1, value: Math.floor(audioPos / 1000), 'aria-label': 'Seek' });
+    seek.setAttribute('aria-valuetext', spoken());
     seek.addEventListener('input', () => { seeking = true; });
     seek.addEventListener('change', () => { seeking = false; call('seek', Number(seek.value)); });
-    return [toggle, seek, el('p', { id: 'audio-time', class: 'muted', text: fmt(audioPos) + ' / ' + fmt(audioDur) })];
+    return [el('div', { class: 'music-row' }, toggle, seek, el('span', { id: 'audio-time', class: 'music-time', text: timeText() }))];
   }
 
   // updates only what changed; the host's slider/toggle nodes and a seek drag survive broadcasts
