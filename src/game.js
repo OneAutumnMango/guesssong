@@ -17,7 +17,7 @@ export class Game {
     this.tracks = {}; // review: playerId -> Track[]
     this.removals = {};
     this.ready = new Set();
-    this.guesses = new Map(); // playerId -> { id, at }
+    this.guesses = new Map(); // playerId -> { id, elapsed }
     this.roundStart = null;
     this.deltas = {};
   }
@@ -138,11 +138,23 @@ export class Game {
     );
   }
 
-  guess(playerId, guessedId) {
-    if (this.phase !== 'playing') return false;
-    const at = this.now();
-    if (at > this.deadline || this.guesses.has(playerId) || !this.#guessers().includes(playerId)) return false;
-    this.guesses.set(playerId, { id: guessedId, at });
+  // Returns why a guess would be rejected, or null. latencyMs is the guesser's measured RTT (clamped to 0..1000).
+  guessProblem(playerId, latencyMs = 0) {
+    if (this.phase !== 'playing') return 'Not accepting guesses right now';
+    if (this.queue[this.round].ownerId === playerId) return 'This is your song, sit this round out';
+    if (!this.#guessers().includes(playerId)) return 'You are not guessing this round';
+    if (this.guesses.has(playerId)) return 'You already locked in a guess';
+    return this.#elapsed(latencyMs) > this.durationMs ? 'Time is up' : null;
+  }
+
+  #elapsed(latencyMs) {
+    const lat = Number.isFinite(latencyMs) ? Math.min(1000, Math.max(0, latencyMs)) : 0;
+    return this.now() - this.roundStart - lat;
+  }
+
+  guess(playerId, guessedId, latencyMs = 0) {
+    if (this.guessProblem(playerId, latencyMs) !== null) return false;
+    this.guesses.set(playerId, { id: guessedId, elapsed: Math.max(0, this.#elapsed(latencyMs)) });
     return true;
   }
 
@@ -155,7 +167,7 @@ export class Game {
     const { ownerId } = this.queue[this.round];
     for (const id of this.players.keys()) this.deltas[id] = 0;
     for (const [id, g] of this.guesses) {
-      const d = scoreFor(g.id === ownerId, g.at - this.roundStart, this.durationMs);
+      const d = scoreFor(g.id === ownerId, g.elapsed, this.durationMs);
       this.deltas[id] = d;
       this.players.get(id).score += d;
     }
@@ -182,9 +194,10 @@ export class Game {
       v.removalsLeft = this.settings.buffer - this.removals[playerId];
     }
     if (['between', 'playing', 'reveal'].includes(this.phase)) {
-      v.round = { index: this.round, total: this.queue.length, deadline: this.deadline, guessedCount: this.guesses.size };
+      v.round = { index: this.round, total: this.queue.length, deadline: this.deadline, remainingMs: this.deadline == null ? null : Math.max(0, this.deadline - this.now()), guessedCount: this.guesses.size };
       if (playerId === this.hostId) v.nextUri = this.queue[this.round].track.uri;
     }
+    if (this.phase === 'playing' && this.queue[this.round].ownerId === playerId) v.iOwnThisSong = true;
     if (['playing', 'reveal'].includes(this.phase) && this.guesses.has(playerId)) {
       v.myGuess = this.guesses.get(playerId).id;
     }

@@ -202,3 +202,81 @@ test('addPlayer rejects a duplicate id', () => {
   const g = mk();
   assert.throws(() => g.addPlayer('a', 'Again'), /already/i);
 });
+
+const playing = (extra = (g) => {}) => {
+  const g = mk();
+  extra(g);
+  toBetween(g);
+  g.beginRound();
+  const owner = ['a', 'b'].find((p) => g.guessProblem(p) === 'This is your song, sit this round out');
+  return { g, owner, guesser: owner === 'a' ? 'b' : 'a' };
+};
+
+test('iOwnThisSong is only set for the owner while playing', () => {
+  const { g, owner, guesser } = playing();
+  assert.equal(g.view(owner).iOwnThisSong, true);
+  assert.ok(!g.view(guesser).iOwnThisSong);
+  assert.ok(!/iOwnThisSong|ownerId/.test(JSON.stringify(g.view(guesser))));
+  g.guess(guesser, owner);
+  g.endRound();
+  assert.ok(!g.view(owner).iOwnThisSong);
+});
+
+test('view.round has remainingMs', () => {
+  const { g, guesser } = playing();
+  assert.equal(g.view(guesser).round.remainingMs, 20000);
+  clock = 5000;
+  assert.equal(g.view(guesser).round.remainingMs, 15000);
+  clock = 99999;
+  assert.equal(g.view(guesser).round.remainingMs, 0);
+});
+
+test('specific rejection messages', () => {
+  const { g, owner, guesser } = playing();
+  assert.equal(g.guessProblem(owner), 'This is your song, sit this round out');
+  assert.equal(g.guessProblem('nobody'), 'You are not guessing this round');
+  assert.equal(g.guessProblem(guesser), null);
+  g.guess(guesser, owner);
+  assert.equal(g.guessProblem(guesser), 'You already locked in a guess');
+  const h = playing().g;
+  clock = 20001;
+  assert.equal(h.guessProblem(['a', 'b'].find((p) => h.guessProblem(p) === 'Time is up')), 'Time is up');
+  g.endRound();
+  assert.equal(g.guessProblem(guesser), 'Not accepting guesses right now');
+});
+
+test('non-playing host gets "not guessing" message', () => {
+  const g = mk();
+  g.addPlayer('c', 'Cy');
+  g.configure({ hostPlays: false });
+  g.start({ a: pool('a'), b: pool('b'), c: pool('c') });
+  for (const id of g.participants()) g.setReady(id);
+  g.beginRound();
+  assert.equal(g.guessProblem('a'), 'You are not guessing this round');
+});
+
+test('latency compensation accepts in-flight guesses and clamps', () => {
+  let { g, owner, guesser } = playing();
+  clock = 20400;
+  assert.equal(g.guessProblem(guesser, 0), 'Time is up');
+  assert.equal(g.guess(guesser, owner, 500), true);
+  g.endRound();
+  assert.equal(g.view('a').reveal.deltas[guesser], Math.round(1000 - 500 * (19900 / 20000)));
+
+  ({ g, owner, guesser } = playing());
+  clock = 21500;
+  assert.equal(g.guess(guesser, owner, 5000), false); // clamped to 1000
+  for (const bad of [-50, NaN, 'x', undefined]) {
+    ({ g, owner, guesser } = playing());
+    clock = 20001;
+    assert.equal(g.guess(guesser, owner, bad), false, String(bad)); // treated as 0
+  }
+});
+
+test('elapsed never drops below zero', () => {
+  const { g, owner, guesser } = playing();
+  clock = 100;
+  assert.equal(g.guess(guesser, owner, 500), true);
+  g.endRound();
+  assert.equal(g.view('a').reveal.deltas[guesser], 1000);
+});

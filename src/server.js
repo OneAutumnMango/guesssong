@@ -1,10 +1,12 @@
 import http from 'node:http';
 import { randomBytes, randomInt } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
 import { readFile } from 'node:fs/promises';
 import { resolve, sep, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { Game } from './game.js';
+import { perPlayerCount } from './logic.js';
 import * as realSpotify from './spotify.js';
 import { joinUrl, qrSvg } from './qr.js';
 import { SpotifyError, makePkce, authUrl } from './spotify.js';
@@ -71,6 +73,26 @@ export function createServer({ clientId, publicUrl: rawPublicUrl, spotify = real
     }
   }
 
+  // RTT from our own pings: each carries a server nonce; unknown, malformed or reused pong payloads are ignored.
+  function sendPing(ws) {
+    if (ws.readyState !== 1) return;
+    const nonce = String(++ws.pingSeq);
+    ws.pings.set(nonce, performance.now());
+    if (ws.pings.size > 10) ws.pings.delete(ws.pings.keys().next().value);
+    ws.ping(nonce);
+  }
+
+  function onPong(ws, data) {
+    ws.isAlive = true;
+    const key = Buffer.isBuffer(data) && data.length <= 16 ? data.toString() : '';
+    const sent = ws.pings.get(key);
+    if (sent === undefined) return;
+    ws.pings.delete(key);
+    ws.rtts.push(performance.now() - sent);
+    if (ws.rtts.length > 5) ws.rtts.shift();
+    ws.rtt = Math.min(...ws.rtts);
+  }
+
   function finishRound(code, room) {
     clearTimeout(room.timer);
     clearBots(room);
@@ -106,9 +128,12 @@ export function createServer({ clientId, publicUrl: rawPublicUrl, spotify = real
         const src = hostPool ?? pools[game.hostId] ?? pools[ids[0]];
         if (!src?.length) throw new Error('No songs available for test players');
         const n = ids.length + room.bots.length;
+        const sizes = [...ids.map((id) => pools[id].length), ...room.bots.map(() => src.length)];
+        const per = perPlayerCount(game.settings.total, n, sizes); // same count Game.start will use
         const sharers = room.bots.length + (hostPool ? 0 : 1); // players drawing from the one shared pool
-        if (Math.floor(game.settings.total / n) * sharers > src.length) {
-          throw new Error(`Not enough songs for ${room.bots.length} test players; add fewer test players`);
+        if (per * sharers > src.length) {
+          const k = room.bots.length;
+          throw new Error(`Not enough songs for ${k} test player${k === 1 ? '' : 's'}; lower Total songs or add fewer test players`);
         }
         for (const b of room.bots) pools[b] = [...src];
       }
@@ -138,6 +163,7 @@ export function createServer({ clientId, publicUrl: rawPublicUrl, spotify = real
           ws.ctx = { code, room, key: m.key };
           if (old && old !== ws) old.close(1000);
           room.emptySince = null;
+          sendPing(ws);
           room.game.setConnected(p.id, true);
           recheck(room);
           return broadcast(code, room);
@@ -186,11 +212,22 @@ export function createServer({ clientId, publicUrl: rawPublicUrl, spotify = real
         case 'play':
           game.beginRound();
           scheduleBots(code, room);
-          room.timer = setTimeout(() => finishRound(code, room), durationMs);
+          { // keep the round open a little past the nominal deadline for in-flight guesses of high-ping players
+            let worst = -1;
+            for (const e of room.players.values()) {
+              if (!e.socket) continue;
+              sendPing(e.socket);
+              if (game.guessProblem(e.id) === null) worst = Math.max(worst, e.socket.rtt);
+            }
+            const grace = worst < 0 ? 0 : Math.min(1000, worst) + 100;
+            room.timer = setTimeout(() => finishRound(code, room), durationMs + grace);
+          }
           break;
         case 'guess':
           if (typeof m.playerId !== 'string' || !game.players.has(m.playerId)) throw new Error('Unknown player');
-          if (!game.guess(me, m.playerId)) throw new Error('Guess not accepted');
+          { const problem = game.guessProblem(me, ws.rtt);
+            if (problem) throw new Error(problem);
+            game.guess(me, m.playerId, ws.rtt); }
           if (game.allGuessed()) return finishRound(code, room);
           break;
         case 'next':
@@ -210,11 +247,12 @@ export function createServer({ clientId, publicUrl: rawPublicUrl, spotify = real
     ws.on('message', (d) => { onMessage(ws, d.toString()).catch((e) => console.error('ws handler failed:', e?.message)); });
     ws.on('error', () => {});
     ws.isAlive = true;
-    ws.on('pong', () => { ws.isAlive = true; });
+    ws.rtt = 0; ws.rtts = []; ws.pings = new Map(); ws.pingSeq = 0;
+    ws.on('pong', (d) => onPong(ws, d));
     const ping = setInterval(() => { // keepalive for proxies, and drops peers that stopped answering
       if (!ws.isAlive) return ws.terminate();
       ws.isAlive = false;
-      ws.ping();
+      sendPing(ws);
     }, pingMs);
     ping.unref();
     ws.on('close', () => {
@@ -303,8 +341,14 @@ export function createServer({ clientId, publicUrl: rawPublicUrl, spotify = real
   async function qr(url, res) {
     const room = url.searchParams.getAll('room');
     if (room.length !== 1 || !/^[A-Z]{4}$/.test(room[0]) || !rooms.has(room[0])) return page(res, 404, 'Not found');
+    let svg;
+    try { svg = qrSvg(joinUrl(publicUrl, room[0])); } catch (e) { // the library throws plain strings for oversized input
+      console.error('qr failed:', String(e));
+      res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+      return res.end('QR code unavailable');
+    }
     res.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'no-store' });
-    res.end(qrSvg(joinUrl(publicUrl, room[0])));
+    res.end(svg);
   }
 
   async function serveStatic(url, res) {

@@ -136,6 +136,8 @@ test('full game flow, permissions, reconnect, cleanup', async () => {
     jc.send({ type: 'guess', playerId: 'H' });
     await hc.phase('reveal');
     assert.ok(Date.now() - t0 < 250);
+    hc.send({ type: 'guess', playerId: 'J' });
+    await hc.until((m) => m.type === 'error' && /Not accepting guesses right now/.test(m.message));
     const revealSnap = t.snap(code);
     jc.send({ type: 'next' });
     assert.match((await jc.until((m) => m.type === 'error' && /host/i.test(m.message))).message, /host/i);
@@ -657,6 +659,7 @@ test('dev: host who does not play can play with test players to the end', async 
     for (;;) {
       hc.send({ type: 'play' });
       await hc.until((m) => m.type === 'state' && m.view.phase === 'reveal', 2500);
+      for (const [id, g] of room.game.guesses) assert.ok(g.id !== 'H' && g.id !== id, 'bot guessed a non-participant or itself');
       hc.send({ type: 'next' });
       const nx = await hc.until((m) => m.type === 'state' && ['between', 'finished'].includes(m.view.phase));
       if (nx.view.phase === 'finished') break;
@@ -676,7 +679,7 @@ test('dev: too few songs for the test players is a clear error', async () => {
     for (let i = 0; i < 3; i++) hc.send({ type: 'addBot' });
     await players(hc, 4);
     hc.send({ type: 'start' });
-    assert.match((await hc.err()).message, /Not enough songs for 3 test players/);
+    assert.match((await hc.err()).message, /Not enough songs for 3 test players; lower Total songs or add fewer test players/);
     assert.equal(room.game.phase, 'lobby');
   } finally {
     await t.close();
@@ -728,4 +731,139 @@ test('qr changes when publicUrl changes', async () => {
     }
   };
   assert.notEqual(await svgFor('https://a.example.test'), await svgFor('https://b.example.test'));
+});
+
+test('dev: shortage check uses the real per-player count', async () => {
+  const sp = { ...spotify, fetchPool: async (token) => { const p = await spotify.fetchPool(token); return token === 'tok-low' ? p.slice(0, 3) : p; } };
+  const t = await boot(300, { spotify: sp, opts: devOpts });
+  try {
+    const { hc, code } = await devHost(t);
+    await t.connect((await t.login(code, 'low')).key);
+    hc.send({ type: 'addBot' });
+    hc.send({ type: 'addBot' });
+    await players(hc, 4);
+    hc.send({ type: 'settings', settings: { total: 40 } });
+    hc.send({ type: 'start' });
+    await hc.phase('review'); // per player is 3, so 3 sharers need 9 of the host's 20 songs
+  } finally {
+    await t.close();
+  }
+});
+
+test('dev: one test player gets correct grammar in the shortage error', async () => {
+  const sp = { ...spotify, fetchPool: async (token) => (await spotify.fetchPool(token)).slice(0, 3) };
+  const t = await boot(300, { spotify: sp, opts: devOpts });
+  try {
+    const { hc } = await devHost(t);
+    hc.send({ type: 'addBot' });
+    await players(hc, 2);
+    hc.send({ type: 'start' });
+    assert.match((await hc.err()).message, /for 1 test player; lower/);
+  } finally {
+    await t.close();
+  }
+});
+
+test('qr generation failure is a 500 and the server survives', async () => {
+  const t = await boot(300, { opts: { publicUrl: 'https://' + 'a'.repeat(3500) + '.example' } });
+  try {
+    await t.login('new', 'H');
+    const code = [...t.server.rooms.keys()][0];
+    const r = await fetch(`${t.base}/qr.svg?room=${code}`);
+    assert.equal(r.status, 500);
+    assert.ok((await r.text()).length > 0);
+    assert.equal((await fetch(`${t.base}/play.html`)).status, 200);
+  } finally {
+    await t.close();
+  }
+});
+
+// raw client that answers pings itself, after delayMs, with the exact payload
+async function slowClient(t, key, delayMs) {
+  const ws = new WebSocket(`ws://127.0.0.1:${t.server.address().port}/ws`, { autoPong: false });
+  t.sockets.push(ws);
+  ws.pings = [];
+  ws.on('ping', (d) => { ws.pings.push(d); setTimeout(() => { if (ws.readyState === 1) ws.pong(d); }, delayMs); });
+  await new Promise((r) => ws.on('open', r));
+  ws.send(JSON.stringify({ type: 'hello', key }));
+  return ws;
+}
+const serverSocket = (t, code, id) => [...t.server.rooms.get(code).players.values()].find((p) => p.id === id).socket;
+async function waitFor(fn, ms = 2000) {
+  for (let i = 0; i < ms / 10; i++) { if (fn()) return; await new Promise((r) => setTimeout(r, 10)); }
+  throw new Error('condition not met');
+}
+
+test('rtt is measured from our own ping nonce and cannot be forged', async () => {
+  const t = await boot(300, { opts: { pingMs: 60000 } });
+  try {
+    const h = await t.login('new', 'H');
+    const ws = await slowClient(t, h.key, 150);
+    const code = [...t.server.rooms.keys()][0];
+    await waitFor(() => serverSocket(t, code, 'H')?.rtt >= 140);
+    const sock = serverSocket(t, code, 'H');
+    const measured = sock.rtt;
+    assert.ok(measured < 400, `rtt ${measured}`);
+    ws.pong(Buffer.from('forged'));
+    ws.pong();
+    ws.pong(ws.pings[0]); // replay of an already-used payload
+    ws.pong(Buffer.alloc(100, 1));
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(sock.rtt, measured);
+    assert.equal(t.server.rooms.size, 1); // still alive
+  } finally {
+    await t.close();
+  }
+});
+
+test('forged pongs alone give no rtt', async () => {
+  const t = await boot(300, { opts: { pingMs: 60000 } });
+  try {
+    const h = await t.login('new', 'H');
+    const ws = new WebSocket(`ws://127.0.0.1:${t.server.address().port}/ws`, { autoPong: false });
+    t.sockets.push(ws);
+    await new Promise((r) => ws.on('open', r));
+    ws.send(JSON.stringify({ type: 'hello', key: h.key }));
+    ws.pong('made-up');
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(serverSocket(t, [...t.server.rooms.keys()][0], 'H').rtt, 0);
+  } finally {
+    await t.close();
+  }
+});
+
+test('round close includes grace for a high-rtt guesser; remainingMs stays nominal', async () => {
+  const t = await boot(300, { opts: { pingMs: 60000 } });
+  try {
+    const h = await t.login('new', 'H');
+    const hc = await t.connect(h.key);
+    const code = (await hc.until((m) => m.type === 'state')).view.code;
+    const j = await t.login(code, 'J');
+    const jw = await slowClient(t, j.key, 150);
+    await waitFor(() => serverSocket(t, code, 'J')?.rtt >= 140);
+    hc.send({ type: 'settings', settings: { total: 8, buffer: 0 } });
+    hc.send({ type: 'start' });
+    await hc.phase('review');
+    hc.send({ type: 'ready' });
+    jw.send(JSON.stringify({ type: 'ready' }));
+    await hc.phase('between');
+    const game = t.server.rooms.get(code).game;
+    let measured = false;
+    for (let round = 0; round < 4 && !measured; round++) {
+      const t0 = Date.now();
+      hc.send({ type: 'play' });
+      const pl = await hc.phase('playing');
+      assert.ok(pl.view.round.remainingMs <= 300 && pl.view.round.remainingMs > 100);
+      const hOwns = game.queue[game.round].ownerId === 'H'; // grace counts only eligible guessers: only then does J's rtt matter
+      await hc.phase('reveal');
+      const dt = Date.now() - t0;
+      if (hOwns) { assert.ok(dt >= 480 && dt <= 1200, `closed after ${dt}ms`); measured = true; } // 300 + ~150 rtt + 100
+      else assert.ok(dt >= 380 && dt <= 475, `closed after ${dt}ms`);
+      hc.send({ type: 'next' });
+      await hc.until((m) => m.type === 'state' && ['between', 'finished'].includes(m.view.phase));
+    }
+    assert.ok(measured);
+  } finally {
+    await t.close();
+  }
 });

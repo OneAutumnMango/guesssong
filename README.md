@@ -102,6 +102,9 @@ npm test
 - State is in memory only. A server restart ends all games.
 - Max 8 players per room.
 - Liked songs are sampled from up to 5 random pages of 50. Recents is at most 50 tracks.
+- Latency compensation: the server measures each player's round-trip time from its own websocket pings (capped at 1 s) and subtracts it from a guess's elapsed time.
+- The round stays open up to about 1.1 s past the nominal deadline so in-flight guesses of high-ping players still count; it still ends at once when everyone has guessed.
+- A player who deliberately delays their ping replies can claim up to the 1 s cap.
 - The host's embed shows the song title to the host.
 - The Spotify embed plays the full track only if the host's browser is logged in to Spotify; otherwise a 30 s preview.
 
