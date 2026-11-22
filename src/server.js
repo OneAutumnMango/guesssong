@@ -13,6 +13,7 @@ import { SpotifyError, makePkce, authUrl } from './spotify.js';
 
 const MAX_ROOMS = 20;
 const MAX_PENDING = 1000;
+const GRACE_MS = 1100;
 const STATE_TTL = 10 * 60 * 1000;
 const ABANDON_TTL = 30 * 60 * 1000;
 const LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
@@ -212,15 +213,14 @@ export function createServer({ clientId, publicUrl: rawPublicUrl, spotify = real
         case 'play':
           game.beginRound();
           scheduleBots(code, room);
-          { // keep the round open a little past the nominal deadline for in-flight guesses of high-ping players
-            let worst = -1;
+          { // keep the round open a fixed 1100 ms past the nominal end so in-flight guesses of high-ping players count
+            let human = false;
             for (const e of room.players.values()) {
               if (!e.socket) continue;
               sendPing(e.socket);
-              if (game.guessProblem(e.id) === null) worst = Math.max(worst, e.socket.rtt);
+              if (game.guessProblem(e.id) === null) human = true;
             }
-            const grace = worst < 0 ? 0 : Math.min(1000, worst) + 100;
-            room.timer = setTimeout(() => finishRound(code, room), durationMs + grace);
+            room.timer = setTimeout(() => finishRound(code, room), durationMs + (human ? GRACE_MS : 0));
           }
           break;
         case 'guess':

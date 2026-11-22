@@ -3,7 +3,8 @@ import { scoreFor, perPlayerCount, pickTracks } from './logic.js';
 const MAX_PLAYERS = 8;
 
 export class Game {
-  constructor({ now = Date.now, rng = Math.random, durationMs = 20000 } = {}) {
+  // now defaults to the monotonic clock: wall-clock steps must not change round timing
+  constructor({ now = () => performance.now(), rng = Math.random, durationMs = 20000 } = {}) {
     this.now = now;
     this.rng = rng;
     this.durationMs = durationMs;
@@ -194,7 +195,7 @@ export class Game {
       v.removalsLeft = this.settings.buffer - this.removals[playerId];
     }
     if (['between', 'playing', 'reveal'].includes(this.phase)) {
-      v.round = { index: this.round, total: this.queue.length, deadline: this.deadline, remainingMs: this.deadline == null ? null : Math.max(0, this.deadline - this.now()), guessedCount: this.guesses.size };
+      v.round = { index: this.round, total: this.queue.length, remainingMs: this.deadline == null ? null : Math.max(0, this.deadline - this.now()), guessedCount: this.guesses.size };
       if (playerId === this.hostId) v.nextUri = this.queue[this.round].track.uri;
     }
     if (this.phase === 'playing' && this.queue[this.round].ownerId === playerId) v.iOwnThisSong = true;

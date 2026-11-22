@@ -280,3 +280,27 @@ test('elapsed never drops below zero', () => {
   g.endRound();
   assert.equal(g.view('a').reveal.deltas[guesser], 1000);
 });
+
+test('round timing does not depend on the wall clock', async () => {
+  const g = new Game({ durationMs: 400 }); // default (monotonic) clock
+  g.addPlayer('a', 'Ann', true);
+  g.addPlayer('b', 'Bob');
+  g.start({ a: pool('a'), b: pool('b') });
+  for (const id of g.participants()) g.setReady(id);
+  g.beginRound();
+  const owner = ['a', 'b'].find((p) => g.guessProblem(p) === 'This is your song, sit this round out');
+  const guesser = owner === 'a' ? 'b' : 'a';
+  assert.equal(g.view(guesser).round.deadline, undefined);
+  await new Promise((r) => setTimeout(r, 200));
+  const real = Date.now;
+  Date.now = () => real() + 5000; // a wall-clock step forward
+  try {
+    assert.ok(g.view(guesser).round.remainingMs > 100);
+    assert.equal(g.guess(guesser, owner), true);
+    g.endRound();
+  } finally {
+    Date.now = real;
+  }
+  const d = g.view(owner).reveal.deltas[guesser];
+  assert.ok(d >= 700 && d <= 800, `scored ${d}`); // about 200 of 400 ms elapsed
+});

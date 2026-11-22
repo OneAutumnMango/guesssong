@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import net from 'node:net';
+import { performance } from 'node:perf_hooks';
 import { spawn } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -131,11 +132,11 @@ test('full game flow, permissions, reconnect, cleanup', async () => {
     await hc.phase('playing');
     jc.send({ type: 'guess', playerId: 'nobody' });
     assert.match((await jc.err()).message, /player/i);
-    const t0 = Date.now();
+    const t0 = performance.now();
     hc.send({ type: 'guess', playerId: 'J' });
     jc.send({ type: 'guess', playerId: 'H' });
     await hc.phase('reveal');
-    assert.ok(Date.now() - t0 < 250);
+    assert.ok(performance.now() - t0 < 250);
     hc.send({ type: 'guess', playerId: 'J' });
     await hc.until((m) => m.type === 'error' && /Not accepting guesses right now/.test(m.message));
     const revealSnap = t.snap(code);
@@ -150,11 +151,11 @@ test('full game flow, permissions, reconnect, cleanup', async () => {
     assert.equal((await hc2.until((m) => m.type === 'state')).view.phase, 'between');
 
     // round 2: nobody guesses -> reveal after the timer
-    const t1 = Date.now();
+    const t1 = performance.now();
     hc2.send({ type: 'play' });
     await hc2.phase('reveal');
-    const dt = Date.now() - t1;
-    assert.ok(dt >= 250 && dt <= 900, `reveal after ${dt}ms`);
+    const dt = performance.now() - t1;
+    assert.ok(dt >= 250 && dt <= 1700, `reveal after ${dt}ms`); // 300 + 1100 grace
     hc2.send({ type: 'next' });
     await hc2.phase('finished');
     await jc.phase('finished');
@@ -550,11 +551,11 @@ test('dev mode: solo host plays a full game with test players', async () => {
 
     let rounds = 0;
     for (;;) {
-      const t0 = Date.now();
+      const t0 = performance.now();
       hc.send({ type: 'play' });
       hc.send({ type: 'guess', playerId: 'bot:1' }); // rejected when the host owns the song
       const rev = await hc.phase('reveal');
-      assert.ok(Date.now() - t0 < 2000, 'round should end early once everyone guessed');
+      assert.ok(performance.now() - t0 < 2000, 'round should end early once everyone guessed');
       assert.ok(rev.view.reveal.deltas);
       rounds++;
       hc.send({ type: 'next' });
@@ -615,11 +616,11 @@ test('dev: removeBot after start is refused and keeps state consistent', async (
     assert.ok((await hc.err()).message);
     assert.deepEqual(room.bots, ['bot:1']);
     assert.ok(room.game.players.has('bot:1'));
-    const t0 = Date.now();
+    const t0 = performance.now();
     hc.send({ type: 'play' });
     hc.send({ type: 'guess', playerId: 'bot:1' });
     await hc.until((m) => m.type === 'state' && m.view.phase === 'reveal', 2500);
-    assert.ok(Date.now() - t0 < 2000);
+    assert.ok(performance.now() - t0 < 2000);
   } finally {
     await t.close();
   }
@@ -832,37 +833,124 @@ test('forged pongs alone give no rtt', async () => {
   }
 });
 
-test('round close includes grace for a high-rtt guesser; remainingMs stays nominal', async () => {
+// plays rounds (waiting out the others) until the song is owned by ownerId; returns with that round playing
+async function roundOwnedBy(hc, game, ownerId) {
+  for (let i = 0; i < 4; i++) {
+    const t0 = performance.now();
+    hc.send({ type: 'play' });
+    await hc.phase('playing');
+    if (game.queue[game.round].ownerId === ownerId) return t0;
+    await hc.phase('reveal');
+    hc.send({ type: 'next' });
+    await hc.until((m) => m.type === 'state' && m.view.phase === 'between');
+  }
+  throw new Error('no such round');
+}
+
+test('round stays open a fixed 1100 ms past the nominal duration while a human can guess', async () => {
   const t = await boot(300, { opts: { pingMs: 60000 } });
+  try {
+    const { hc, jc, code } = await pair(t);
+    hc.send({ type: 'settings', settings: { total: 2, buffer: 0 } });
+    hc.send({ type: 'start' });
+    await hc.phase('review');
+    hc.send({ type: 'ready' });
+    jc.send({ type: 'ready' });
+    await hc.phase('between');
+    const game = t.server.rooms.get(code).game;
+    for (let round = 0; round < 2; round++) { // each player owns one song, so both kinds of round run
+      const t0 = performance.now();
+      hc.send({ type: 'play' });
+      const pl = await hc.phase('playing');
+      assert.ok(pl.view.round.remainingMs <= 300 && pl.view.round.remainingMs > 100);
+      assert.equal(pl.view.round.deadline, undefined);
+      await hc.phase('reveal');
+      const dt = performance.now() - t0;
+      assert.ok(dt >= 1300 && dt <= 2000, `closed after ${dt}ms`); // 300 + 1100
+      hc.send({ type: 'next' });
+      await hc.until((m) => m.type === 'state' && ['between', 'finished'].includes(m.view.phase));
+    }
+  } finally {
+    await t.close();
+  }
+});
+
+test('dev: rounds with only test players stay short (no grace)', async () => {
+  const t = await boot(300, { opts: { devMode: true, botDelayMs: [5000, 6000] } });
+  try {
+    const { hc } = await devHost(t, false);
+    hc.send({ type: 'addBot' });
+    hc.send({ type: 'addBot' });
+    await players(hc, 3);
+    hc.send({ type: 'settings', settings: { total: 2, buffer: 0 } });
+    hc.send({ type: 'start' });
+    await hc.phase('between');
+    const t0 = performance.now();
+    hc.send({ type: 'play' });
+    await hc.phase('reveal');
+    const dt = performance.now() - t0;
+    assert.ok(dt >= 280 && dt <= 900, `closed after ${dt}ms`);
+  } finally {
+    await t.close();
+  }
+});
+
+test('guesser who connects after Play still gets the fixed grace', async () => {
+  const t = await boot(800, { opts: { pingMs: 60000 } });
+  try {
+    const { hc, jc, j, code } = await pair(t);
+    const kc = await t.connect((await t.login(code, 'K')).key);
+    await kc.phase('lobby');
+    hc.send({ type: 'settings', settings: { total: 3, buffer: 0 } });
+    hc.send({ type: 'start' });
+    await hc.phase('review');
+    hc.send({ type: 'ready' });
+    jc.send({ type: 'ready' });
+    kc.send({ type: 'ready' });
+    await hc.phase('between');
+    const game = t.server.rooms.get(code).game;
+    jc.ws.terminate();
+    await waitFor(() => !game.players.get('J').connected);
+    const t0 = await roundOwnedBy(hc, game, 'H');
+    const jw = await slowClient(t, j.key, 600);
+    jw.msgs = [];
+    jw.on('message', (d) => jw.msgs.push(JSON.parse(d)));
+    await waitFor(() => serverSocket(t, code, 'J')?.rtt >= 580);
+    await new Promise((r) => setTimeout(r, Math.max(0, 800 + 500 - (performance.now() - t0))));
+    jw.send(JSON.stringify({ type: 'guess', playerId: 'H' }));
+    const rev = await kc.until((m) => m.type === 'state' && m.view.phase === 'reveal' && m.view.reveal.ownerId === 'H'); // skip reveals of earlier rounds
+    assert.ok(!jw.msgs.some((m) => m.type === 'error'), JSON.stringify(jw.msgs.filter((m) => m.type === 'error')));
+    assert.ok(rev.view.reveal.deltas.J >= 520 && rev.view.reveal.deltas.J <= 600, `J scored ${rev.view.reveal.deltas.J}`); // about 700 of 800 ms compensated
+  } finally {
+    await t.close();
+  }
+});
+
+test('high-rtt guess inside the grace window is accepted and scored from compensated elapsed', async () => {
+  const t = await boot(600, { opts: { pingMs: 60000 } });
   try {
     const h = await t.login('new', 'H');
     const hc = await t.connect(h.key);
     const code = (await hc.until((m) => m.type === 'state')).view.code;
     const j = await t.login(code, 'J');
-    const jw = await slowClient(t, j.key, 150);
-    await waitFor(() => serverSocket(t, code, 'J')?.rtt >= 140);
-    hc.send({ type: 'settings', settings: { total: 8, buffer: 0 } });
+    const jw = await slowClient(t, j.key, 300);
+    jw.msgs = [];
+    jw.on('message', (d) => jw.msgs.push(JSON.parse(d)));
+    await waitFor(() => serverSocket(t, code, 'J')?.rtt >= 290);
+    hc.send({ type: 'settings', settings: { total: 2, buffer: 0 } });
     hc.send({ type: 'start' });
     await hc.phase('review');
     hc.send({ type: 'ready' });
     jw.send(JSON.stringify({ type: 'ready' }));
     await hc.phase('between');
     const game = t.server.rooms.get(code).game;
-    let measured = false;
-    for (let round = 0; round < 4 && !measured; round++) {
-      const t0 = Date.now();
-      hc.send({ type: 'play' });
-      const pl = await hc.phase('playing');
-      assert.ok(pl.view.round.remainingMs <= 300 && pl.view.round.remainingMs > 100);
-      const hOwns = game.queue[game.round].ownerId === 'H'; // grace counts only eligible guessers: only then does J's rtt matter
-      await hc.phase('reveal');
-      const dt = Date.now() - t0;
-      if (hOwns) { assert.ok(dt >= 480 && dt <= 1200, `closed after ${dt}ms`); measured = true; } // 300 + ~150 rtt + 100
-      else assert.ok(dt >= 380 && dt <= 475, `closed after ${dt}ms`);
-      hc.send({ type: 'next' });
-      await hc.until((m) => m.type === 'state' && ['between', 'finished'].includes(m.view.phase));
-    }
-    assert.ok(measured);
+    const t0 = await roundOwnedBy(hc, game, 'H');
+    await new Promise((r) => setTimeout(r, Math.max(0, 800 - (performance.now() - t0)))); // 200 ms after the nominal end
+    jw.send(JSON.stringify({ type: 'guess', playerId: 'H' }));
+    const rev = await hc.phase('reveal');
+    assert.ok(!jw.msgs.some((m) => m.type === 'error'), JSON.stringify(jw.msgs));
+    const d = rev.view.reveal.deltas.J; // about 500 ms compensated of 600 -> about 583
+    assert.ok(d >= 540 && d <= 610, `J scored ${d}`);
   } finally {
     await t.close();
   }
