@@ -81,3 +81,20 @@ test('403 throws SpotifyError', async () => {
     await assert.rejects(p, (e) => e instanceof SpotifyError && e.status === 403 && !e.message.includes('secret-token'));
   }
 });
+
+test('exchangeCode without access_token throws 502', async () => {
+  await assert.rejects(exchangeCode({ clientId: 'c', redirectUri: 'r', code: 'c', verifier: 'v' }, async () => res(200, {})),
+    (e) => e instanceof SpotifyError && e.status === 502);
+});
+
+test('malformed JSON on 2xx throws SpotifyError', async () => {
+  const f = async () => ({ ok: true, status: 200, json: async () => { throw new SyntaxError('x'); }, text: async () => '' });
+  await assert.rejects(fetchProfile('t', f), (e) => e instanceof SpotifyError && e.status === 200);
+});
+
+test('fetchPool tolerates sparse data', async () => {
+  const f = async () => res(200, { items: [{ track: { id: '1', name: 'n' } }, { track: null }, null, { track: { name: 'noid' } }] });
+  assert.deepEqual(await fetchPool('t', 'recents', f), [{ id: '1', uri: 'spotify:track:1', title: 'n', artist: '' }]);
+  const g = async (url) => (url.endsWith('limit=1') ? res(200, { total: 100 }) : res(200, {}));
+  assert.deepEqual(await fetchPool('t', 'liked', g), []);
+});

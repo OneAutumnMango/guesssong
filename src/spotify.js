@@ -28,7 +28,11 @@ export function authUrl({ clientId, redirectUri, state, challenge }) {
 async function call(fetchFn, url, opts) {
   const r = await fetchFn(url, opts);
   if (!r.ok) throw new SpotifyError(r.status, await r.text());
-  return r.json();
+  try {
+    return await r.json();
+  } catch {
+    throw new SpotifyError(r.status, 'invalid JSON');
+  }
 }
 
 export async function exchangeCode({ clientId, redirectUri, code, verifier }, fetchFn = fetch) {
@@ -41,6 +45,7 @@ export async function exchangeCode({ clientId, redirectUri, code, verifier }, fe
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: body.toString(),
   });
+  if (!j.access_token) throw new SpotifyError(502, 'no access_token in token response');
   return j.access_token;
 }
 
@@ -53,9 +58,9 @@ export async function fetchProfile(token, fetchFn = fetch) {
 
 const toTracks = (items) => {
   const seen = new Map();
-  for (const { track: t } of items) {
+  for (const t of (items ?? []).map((i) => i?.track)) {
     if (t && t.id && !seen.has(t.id)) {
-      seen.set(t.id, { id: t.id, uri: 'spotify:track:' + t.id, title: t.name, artist: t.artists.map((a) => a.name).join(', ') });
+      seen.set(t.id, { id: t.id, uri: 'spotify:track:' + t.id, title: t.name, artist: (t.artists ?? []).map((a) => a.name).join(', ') });
     }
   }
   return [...seen.values()];
@@ -72,5 +77,5 @@ export async function fetchPool(token, source, fetchFn = fetch, rng = Math.rando
     [pages[i], pages[j]] = [pages[j], pages[i]];
   }
   const got = await Promise.all(pages.slice(0, 5).map((p) => get(token, `/me/tracks?limit=50&offset=${p * 50}`, fetchFn)));
-  return toTracks(got.flatMap((g) => g.items));
+  return toTracks(got.flatMap((g) => g.items ?? []));
 }
