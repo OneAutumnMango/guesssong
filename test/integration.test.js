@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import net from 'node:net';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import WebSocket from 'ws';
@@ -45,6 +45,10 @@ async function boot(durationMs = 300, extra = {}) {
   };
   const callback = (code, state) => fetch(`${base}/callback?code=${code}&state=${state}`, { redirect: 'manual' });
   const snap = (code) => { const g = server.rooms.get(code).game; return JSON.stringify([g.phase, g.settings, g.round]); };
+  const waitStarting = async (room) => {
+    for (let i = 0; i < 200 && !room.starting; i++) await new Promise((r) => setTimeout(r, 5));
+    if (!room.starting) throw new Error('start never began');
+  };
   const connect = async (key) => {
     const ws = new WebSocket(`ws://127.0.0.1:${server.address().port}/ws`);
     sockets.push(ws);
@@ -69,7 +73,7 @@ async function boot(durationMs = 300, extra = {}) {
     return c;
   };
   const close = () => new Promise((r) => { sockets.forEach((s) => s.terminate()); server.close(r); });
-  return { server, base, login, loginState, callback, snap, connect, close };
+  return { server, base, login, loginState, callback, waitStarting, sockets, snap, connect, close };
 }
 
 test('full game flow, permissions, reconnect, cleanup', async () => {
@@ -263,7 +267,7 @@ test('key rotation during start stores no token', async () => {
     const state = await t.loginState(code);
     hc.send({ type: 'start' });
     const room = t.server.rooms.get(code);
-    while (!room.starting) await new Promise((r) => setTimeout(r, 5));
+    await t.waitStarting(room);
     assert.equal((await t.callback('J', state)).status, 302); // rotation while start awaits pools
     release();
     await hc.phase('review');
@@ -288,6 +292,138 @@ test('hung pool fetch times out, names the player, and start can be retried', as
     hang = false;
     hc.send({ type: 'start' });
     await hc.phase('review');
+  } finally {
+    await t.close();
+  }
+});
+
+// helper: host + joiner in a room, both connected, in lobby
+async function pair(t, joiner = 'J') {
+  const h = await t.login('new', 'H');
+  const hc = await t.connect(h.key);
+  const code = (await hc.until((m) => m.type === 'state')).view.code;
+  const j = await t.login(code, joiner);
+  const jc = await t.connect(j.key);
+  await jc.phase('lobby');
+  return { h, hc, j, jc, code };
+}
+
+test('client websocket path matches the server', async () => {
+  const src = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const m = /location\.host\s*\+\s*'([^']*)'/.exec(src);
+  assert.ok(m, 'client ws url not found');
+  assert.equal(m[1], '/ws');
+  const t = await boot();
+  try {
+    const ws = new WebSocket(`ws://127.0.0.1:${t.server.address().port}${m[1]}`);
+    t.sockets.push(ws);
+    await new Promise((res, rej) => { ws.on('open', res); ws.on('error', rej); });
+  } finally {
+    await t.close();
+  }
+});
+
+test('rejoin a started game by room code; strangers are refused; no token kept', async () => {
+  const t = await boot();
+  try {
+    const { hc, code } = await pair(t);
+    hc.send({ type: 'start' });
+    await hc.phase('review');
+    const j2 = await t.login(code, 'J'); // J lost their key
+    assert.equal(j2.res.status, 302);
+    const jc2 = await t.connect(j2.key);
+    assert.equal((await jc2.phase('review')).view.phase, 'review');
+    const stranger = await t.login(code, 'S');
+    assert.equal(stranger.res.status, 403);
+    assert.match(await stranger.res.text(), /already started/);
+    for (const p of t.server.rooms.get(code).players.values()) assert.equal(p.token, null);
+  } finally {
+    await t.close();
+  }
+});
+
+test('disconnected participant does not block review', async () => {
+  const t = await boot();
+  try {
+    const { hc, jc } = await pair(t);
+    hc.send({ type: 'start' });
+    await hc.phase('review');
+    jc.ws.terminate();
+    await hc.until((m) => m.type === 'state' && m.view.players.some((p) => !p.connected));
+    hc.send({ type: 'ready' });
+    await hc.phase('between');
+  } finally {
+    await t.close();
+  }
+});
+
+test('socket closing while everyone else is ready starts the game', async () => {
+  const t = await boot();
+  try {
+    const { hc, jc } = await pair(t);
+    hc.send({ type: 'start' });
+    await hc.phase('review');
+    hc.send({ type: 'ready' });
+    await hc.until((m) => m.type === 'state' && m.view.players.find((p) => p.id === 'H').ready);
+    jc.ws.terminate();
+    await hc.phase('between');
+  } finally {
+    await t.close();
+  }
+});
+
+test('server pings websockets', async () => {
+  const t = await boot(300, { opts: { pingMs: 50 } });
+  try {
+    const ws = new WebSocket(`ws://127.0.0.1:${t.server.address().port}/ws`);
+    t.sockets.push(ws);
+    await new Promise((res, rej) => { ws.on('ping', res); ws.on('error', rej); setTimeout(() => rej(new Error('no ping')), 1000); });
+  } finally {
+    await t.close();
+  }
+});
+
+test('login state cap evicts oldest instead of refusing', async () => {
+  const t = await boot();
+  try {
+    for (let i = 0; i < 1005; i++) await fetch(`${t.base}/login?room=new`, { redirect: 'manual' });
+    assert.equal((await fetch(`${t.base}/login?room=new`, { redirect: 'manual' })).status, 302);
+  } finally {
+    await t.close();
+  }
+});
+
+test('settings and joins are refused while starting', async () => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const sp = { ...spotify, fetchPool: async (token, src) => { if (token === 'tok-H') await gate; return spotify.fetchPool(token, src); } };
+  const t = await boot(300, { spotify: sp });
+  try {
+    const { hc, code } = await pair(t);
+    const state = await t.loginState(code);
+    hc.send({ type: 'start' });
+    await t.waitStarting(t.server.rooms.get(code));
+    hc.send({ type: 'settings', settings: { total: 6 } });
+    assert.match((await hc.err()).message, /starting/);
+    const r = await t.callback('X', state);
+    assert.equal(r.status, 409);
+    assert.match(await r.text(), /starting/);
+    release();
+    await hc.phase('review');
+  } finally {
+    release();
+    await t.close();
+  }
+});
+
+test('security headers on static and error responses', async () => {
+  const t = await boot();
+  try {
+    for (const path of ['/play.html', '/nope.txt', '/callback?state=x']) {
+      const r = await fetch(t.base + path);
+      assert.equal(r.headers.get('content-security-policy'), "frame-ancestors 'none'", path);
+      assert.equal(r.headers.get('x-content-type-options'), 'nosniff', path);
+    }
   } finally {
     await t.close();
   }

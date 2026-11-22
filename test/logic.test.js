@@ -35,3 +35,7 @@ test('pickTracks: short pool returns fewer, no throw', () => {
   assert.equal(r.a.length + r.b.length, 3);
   assert.ok(r.b.length < 3);
 });
+
+test('scoreFor clamps negative elapsed', () => {
+  assert.equal(scoreFor(true, -2000), 1000);
+});

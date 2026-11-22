@@ -1,5 +1,5 @@
 export const scoreFor = (correct, elapsedMs, durationMs = 20000) =>
-  correct ? Math.round(1000 - 500 * Math.min(elapsedMs / durationMs, 1)) : 0;
+  correct ? Math.round(1000 - 500 * Math.min(Math.max(0, elapsedMs) / durationMs, 1)) : 0;
 
 export const perPlayerCount = (total, playerCount, poolSizes) =>
   Math.min(Math.floor(total / playerCount), ...poolSizes);

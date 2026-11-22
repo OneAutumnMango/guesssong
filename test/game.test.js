@@ -149,3 +149,51 @@ test('configure validates input atomically', () => {
   h.start({ a: pool('a'), b: pool('b') });
   assert.throws(() => h.configure({ total: 5 }));
 });
+
+test('disconnected participant does not block readiness', () => {
+  const g = mk();
+  g.start({ a: pool('a'), b: pool('b') });
+  g.setConnected('b', false);
+  assert.equal(g.setReady('a'), true);
+  assert.equal(g.phase, 'between');
+});
+
+test('checkReady starts game when remaining player disconnects last', () => {
+  const g = mk();
+  g.start({ a: pool('a'), b: pool('b') });
+  assert.equal(g.setReady('a'), false);
+  assert.equal(g.checkReady(), false);
+  g.setConnected('b', false);
+  assert.equal(g.checkReady(), true);
+  assert.equal(g.phase, 'between');
+});
+
+test('nobody connected and ready does not advance', () => {
+  const g = mk();
+  g.start({ a: pool('a'), b: pool('b') });
+  g.setConnected('a', false);
+  g.setConnected('b', false);
+  assert.equal(g.checkReady(), false);
+});
+
+test('cannot remove the last song', () => {
+  const g = mk();
+  g.configure({ total: 2, buffer: 5 });
+  g.start({ a: pool('a'), b: pool('b') });
+  assert.throws(() => g.removeTrack('a', g.view('a').myTracks[0].id), /Keep at least one song/);
+});
+
+test('equal split after de-duplication of shared tracks', () => {
+  const g = mk();
+  g.start({ a: pool('s', 8), b: pool('s', 8) });
+  assert.equal(g.view('a').myTracks.length, g.view('b').myTracks.length);
+  assert.ok(g.view('a').myTracks.length >= 1);
+});
+
+test('total too small for participants throws clear error', () => {
+  const g = mk();
+  g.addPlayer('c', 'Cy');
+  g.addPlayer('d', 'Di');
+  g.configure({ total: 3 });
+  assert.throws(() => g.start({ a: pool('a'), b: pool('b'), c: pool('c'), d: pool('d') }), /Need at least 1 song per player; raise Total songs/);
+});

@@ -19,7 +19,7 @@ const defaultPublic = fileURLToPath(new URL('../public', import.meta.url));
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
-export function createServer({ clientId, publicUrl, spotify = realSpotify, durationMs = 20000, publicDir = defaultPublic, fetchTimeoutMs = 15000 }) {
+export function createServer({ clientId, publicUrl, spotify = realSpotify, durationMs = 20000, publicDir = defaultPublic, fetchTimeoutMs = 15000, pingMs = 30000 }) {
   const pending = new Map(); // state -> { verifier, room, createdAt }
   const rooms = new Map(); // code -> { game, players: Map<key,{id,token,socket}>, timer, starting, emptySince }
   const redirectUri = publicUrl + '/callback';
@@ -102,6 +102,7 @@ export function createServer({ clientId, publicUrl, spotify = realSpotify, durat
       if (HOST_ONLY.has(m.type) && me !== game.hostId) throw new Error('Only the host can do that');
       switch (m.type) {
         case 'settings':
+          if (room.starting) throw new Error('Game is starting; settings are locked');
           if (!m.settings || typeof m.settings !== 'object' || Array.isArray(m.settings)) throw new Error('Bad settings');
           game.configure(m.settings);
           break;
@@ -138,14 +139,18 @@ export function createServer({ clientId, publicUrl, spotify = realSpotify, durat
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: 8192 });
   wss.on('connection', (ws) => {
-    ws.on('message', (d) => { onMessage(ws, d.toString()).catch(() => {}); });
+    ws.on('message', (d) => { onMessage(ws, d.toString()).catch((e) => console.error('ws handler failed:', e?.message)); });
     ws.on('error', () => {});
+    const ping = setInterval(() => { if (ws.readyState === 1) ws.ping(); }, pingMs); // keeps proxies from idling the socket out
+    ping.unref();
     ws.on('close', () => {
+      clearInterval(ping);
       const c = ws.ctx;
       const p = c?.room.players.get(c.key);
       if (!p || p.socket !== ws) return; // replaced by a reconnect
       p.socket = null;
       c.room.game.setConnected(p.id, false);
+      try { c.room.game.checkReady(); } catch (e) { console.error('checkReady failed:', e.message); } // a leaver must not stall review
       if (![...c.room.players.values()].some((e) => e.socket)) c.room.emptySince = Date.now();
       if (rooms.get(c.code) === c.room) broadcast(c.code, c.room);
     });
@@ -161,10 +166,9 @@ export function createServer({ clientId, publicUrl, spotify = realSpotify, durat
     if (room === 'new') {
       if (rooms.size >= MAX_ROOMS) return page(res, 503, 'The server is full right now. Try again later.');
     } else {
-      const r = /^[A-Z]{4}$/.test(room) && rooms.get(room);
-      if (!r || r.game.phase !== 'lobby') return page(res, 404, 'That room does not exist or has already started.');
+      if (!/^[A-Z]{4}$/.test(room) || !rooms.has(room)) return page(res, 404, 'That room does not exist.');
     }
-    if (pending.size >= MAX_PENDING) return page(res, 503, 'Too many logins in progress. Try again in a minute.');
+    if (pending.size >= MAX_PENDING) pending.delete(pending.keys().next().value); // evict oldest so anonymous GETs cannot lock others out
     const state = randomBytes(24).toString('base64url');
     const { verifier, challenge } = makePkce();
     pending.set(state, { verifier, room, createdAt: Date.now() });
@@ -207,6 +211,7 @@ export function createServer({ clientId, publicUrl, spotify = realSpotify, durat
       room.players.set(key, { id: profile.id, token: keep ? token : null, socket: null });
       room.game.setConnected(profile.id, false);
     } else {
+      if (room.starting) return page(res, 409, 'The host is starting the game; try again in a moment.');
       try {
         room.game.addPlayer(profile.id, profile.name, p.room === 'new');
       } catch (e) {
@@ -236,13 +241,15 @@ export function createServer({ clientId, publicUrl, spotify = realSpotify, durat
   }
 
   const server = http.createServer((req, res) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
     let url;
     try { url = new URL(req.url, 'http://localhost'); } catch { return page(res, 400, 'Bad request'); }
     const h = req.method === 'GET' || req.method === 'HEAD'
       ? url.pathname === '/login' ? login : url.pathname === '/callback' ? callback : serveStatic
       : null;
     if (!h) return page(res, 405, 'Method not allowed');
-    h(url, res).catch(() => { if (!res.headersSent) page(res, 500, 'Server error'); else res.end(); });
+    h(url, res).catch((e) => { console.error('request failed:', e?.message); if (!res.headersSent) page(res, 500, 'Server error'); else res.end(); });
   });
 
   server.on('upgrade', (req, socket, head) => {
@@ -274,5 +281,6 @@ export function createServer({ clientId, publicUrl, spotify = realSpotify, durat
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const { SPOTIFY_CLIENT_ID, PUBLIC_URL, PORT = '3000' } = process.env;
   if (!SPOTIFY_CLIENT_ID || !PUBLIC_URL) { console.error('SPOTIFY_CLIENT_ID and PUBLIC_URL are required'); process.exit(1); }
-  createServer({ clientId: SPOTIFY_CLIENT_ID, publicUrl: PUBLIC_URL.replace(/\/$/, '') }).listen(Number(PORT));
+  const server = createServer({ clientId: SPOTIFY_CLIENT_ID, publicUrl: PUBLIC_URL.replace(/\/$/, '') }).listen(Number(PORT));
+  for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 2000).unref(); }); // open websockets would delay close
 }

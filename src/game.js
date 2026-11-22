@@ -65,11 +65,17 @@ export class Game {
       own[id] = pools[id];
     }
     const per = perPlayerCount(this.settings.total, ids.length, ids.map((id) => own[id].length));
-    this.tracks = pickTracks(own, per, this.rng);
+    if (per < 1) throw new Error('Need at least 1 song per player; raise Total songs');
+    const picked = pickTracks(own, per, this.rng);
     for (const id of ids) {
-      if (!this.tracks[id].length) throw new Error(`${this.players.get(id).name} has no songs`);
+      if (!picked[id].length) throw new Error(`${this.players.get(id).name} has no songs`);
+    }
+    const least = Math.min(...ids.map((id) => picked[id].length)); // de-duplication can leave lists uneven
+    for (const id of ids) {
+      picked[id] = picked[id].slice(0, least);
       this.removals[id] = 0;
     }
+    this.tracks = picked;
     this.phase = 'review';
   }
 
@@ -80,6 +86,7 @@ export class Game {
     if (this.removals[playerId] >= this.settings.buffer) throw new Error('No removals left');
     const i = mine.findIndex((t) => t.id === trackId);
     if (i < 0) throw new Error('Unknown track');
+    if (mine.length <= 1) throw new Error('Keep at least one song');
     mine.splice(i, 1);
     this.removals[playerId]++;
   }
@@ -87,7 +94,15 @@ export class Game {
   setReady(playerId) {
     if (this.phase !== 'review' || !this.tracks[playerId]) return false;
     this.ready.add(playerId);
-    if (!this.participants().every((id) => this.ready.has(id))) return false;
+    return this.checkReady();
+  }
+
+  // Disconnected participants do not block readiness; needs at least one connected, ready player.
+  checkReady() {
+    if (this.phase !== 'review') return false;
+    const ids = this.participants();
+    if (!ids.every((id) => this.ready.has(id) || !this.players.get(id).connected)) return false;
+    if (!ids.some((id) => this.ready.has(id) && this.players.get(id).connected)) return false;
     const q = Object.entries(this.tracks).flatMap(([ownerId, ts]) => ts.map((track) => ({ ownerId, track })));
     if (!q.length) throw new Error('No songs left');
     for (let i = q.length - 1; i > 0; i--) {
