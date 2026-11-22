@@ -4,3 +4,8 @@ context-snapshot.json
 .env
 node_modules
 .superpowers
+session-log.md
+docs/
+project-map.md
+state.md
+known-issues.md
