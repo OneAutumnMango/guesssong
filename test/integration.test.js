@@ -428,3 +428,53 @@ test('security headers on static and error responses', async () => {
     await t.close();
   }
 });
+
+test('review starts when the only ready player reconnects after the other dropped', async () => {
+  const t = await boot();
+  try {
+    const { h, hc, jc } = await pair(t);
+    hc.send({ type: 'start' });
+    await hc.phase('review');
+    hc.send({ type: 'ready' });
+    await jc.until((m) => m.type === 'state' && m.view.players.find((p) => p.id === 'H').ready);
+    hc.ws.terminate();
+    await jc.until((m) => m.type === 'state' && !m.view.players.find((p) => p.id === 'H').connected);
+    jc.ws.terminate();
+    await new Promise((r) => setTimeout(r, 100));
+    const hc2 = await t.connect(h.key);
+    await hc2.phase('between');
+  } finally {
+    await t.close();
+  }
+});
+
+test('peer that never answers pings is terminated and marked disconnected', async () => {
+  const t = await boot(300, { opts: { pingMs: 50 } });
+  try {
+    const h = await t.login('new', 'H');
+    const ws = new WebSocket(`ws://127.0.0.1:${t.server.address().port}/ws`, { autoPong: false });
+    t.sockets.push(ws);
+    await new Promise((r) => ws.on('open', r));
+    ws.send(JSON.stringify({ type: 'hello', key: h.key }));
+    const room = [...t.server.rooms.values()][0];
+    const closed = new Promise((r) => ws.on('close', r));
+    await Promise.race([closed, new Promise((_, rej) => setTimeout(() => rej(new Error('not terminated')), 1500))]);
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(room.game.players.get('H').connected, false);
+  } finally {
+    await t.close();
+  }
+});
+
+test('unknown key gets an error then a clean close', async () => {
+  const t = await boot();
+  try {
+    const c = await t.connect();
+    const closed = new Promise((r) => c.ws.on('close', (code) => r(code)));
+    c.send({ type: 'hello', key: 'nope' });
+    assert.match((await c.err()).message, /Unknown key/);
+    assert.equal(await closed, 1000);
+  } finally {
+    await t.close();
+  }
+});

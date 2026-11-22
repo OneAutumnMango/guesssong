@@ -38,6 +38,11 @@ export function createServer({ clientId, publicUrl, spotify = realSpotify, durat
     }
   }
 
+  // Review can become startable on any connectivity change, so every such change re-checks.
+  function recheck(room) {
+    try { room.game.checkReady(); } catch (e) { console.error('checkReady failed:', e.message); }
+  }
+
   function finishRound(code, room) {
     clearTimeout(room.timer);
     if (room.game.phase !== 'playing') return; // guards double endRound
@@ -90,9 +95,11 @@ export function createServer({ clientId, publicUrl, spotify = realSpotify, durat
           if (old && old !== ws) old.close(1000);
           room.emptySince = null;
           room.game.setConnected(p.id, true);
+          recheck(room);
           return broadcast(code, room);
         }
-        throw new Error('Unknown key');
+        send(ws, { type: 'error', message: 'Unknown key' });
+        return ws.close(1000);
       }
       const ctx = ws.ctx;
       if (!ctx) throw new Error('Say hello first');
@@ -141,7 +148,13 @@ export function createServer({ clientId, publicUrl, spotify = realSpotify, durat
   wss.on('connection', (ws) => {
     ws.on('message', (d) => { onMessage(ws, d.toString()).catch((e) => console.error('ws handler failed:', e?.message)); });
     ws.on('error', () => {});
-    const ping = setInterval(() => { if (ws.readyState === 1) ws.ping(); }, pingMs); // keeps proxies from idling the socket out
+    ws.isAlive = true;
+    ws.on('pong', () => { ws.isAlive = true; });
+    const ping = setInterval(() => { // keepalive for proxies, and drops peers that stopped answering
+      if (!ws.isAlive) return ws.terminate();
+      ws.isAlive = false;
+      ws.ping();
+    }, pingMs);
     ping.unref();
     ws.on('close', () => {
       clearInterval(ping);
@@ -150,7 +163,7 @@ export function createServer({ clientId, publicUrl, spotify = realSpotify, durat
       if (!p || p.socket !== ws) return; // replaced by a reconnect
       p.socket = null;
       c.room.game.setConnected(p.id, false);
-      try { c.room.game.checkReady(); } catch (e) { console.error('checkReady failed:', e.message); } // a leaver must not stall review
+      recheck(c.room); // a leaver must not stall review
       if (![...c.room.players.values()].some((e) => e.socket)) c.room.emptySince = Date.now();
       if (rooms.get(c.code) === c.room) broadcast(c.code, c.room);
     });
@@ -210,6 +223,8 @@ export function createServer({ clientId, publicUrl, spotify = realSpotify, durat
       const keep = room.game.phase === 'lobby' && !room.starting; // never store a token once start began
       room.players.set(key, { id: profile.id, token: keep ? token : null, socket: null });
       room.game.setConnected(profile.id, false);
+      recheck(room); // the old socket's close handler returns early (its key is gone)
+      broadcast(roomCode, room);
     } else {
       if (room.starting) return page(res, 409, 'The host is starting the game; try again in a moment.');
       try {
