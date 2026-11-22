@@ -34,26 +34,31 @@
   const btn = (text, onclick, cls, focus) => el('button', { type: 'button', text, onclick, class: cls || '', 'data-focus': focus || text });
 
   // --- socket
-  let ws = null, retry = 0, view = null, closing = false;
+  let ws = null, retry = 0, view = null, closing = false, awaitingHello = false;
   function send(msg) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg)); }
   function showError(msg) { const e = $('error'); e.textContent = msg || ''; e.hidden = !msg; }
   function ended(msg) {
+    if (controller && controller.pause) controller.pause();
     clearInterval(tick);
     $('error').hidden = true;
     app.replaceChildren(el('p', { text: msg }), el('p', {}, el('a', { href: '/', text: 'Home page' })));
     $('embed-wrap').hidden = true;
   }
   window.addEventListener('pagehide', () => { closing = true; });
+  window.addEventListener('pageshow', (e) => { if (e.persisted) location.reload(); });
   function connect() {
     ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
-    ws.onopen = () => { retry = 0; $('banner').hidden = true; send({ type: 'hello', key }); };
+    ws.onopen = () => { awaitingHello = true; retry = 0; $('banner').hidden = true; send({ type: 'hello', key }); };
     ws.onmessage = (ev) => {
       let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
       if (m.type === 'error') {
-        if (!view) { closing = true; ws.close(); ended(String(m.message)); } // hello rejected: do not retry
+        if (awaitingHello) { // hello rejected: terminal, do not retry
+          closing = true; ws.close();
+          if (!view || view.phase !== 'finished') ended('That game is no longer running');
+        }
         else showError(String(m.message));
       }
-      else if (m.type === 'state') { showError(''); view = m.view; render(); }
+      else if (m.type === 'state') { awaitingHello = false; showError(''); view = m.view; render(); }
     };
     ws.onclose = (ev) => {
       if (closing) return;
@@ -161,7 +166,7 @@
       el('p', { class: 'muted', text: left > 0 ? 'Remove songs you do not want played. Removals left: ' + left : 'No removals left.' }),
       el('ul', {}, ...tracks.map((t) => el('li', { class: 'track' },
         el('span', { text: t.title }), el('span', { class: 'muted', text: t.artist }),
-        left > 0 ? btn('Remove', () => send({ type: 'remove', trackId: t.id }), 'secondary', 'remove-' + t.id) : null))))];
+        left > 0 && tracks.length > 1 ? btn('Remove', () => send({ type: 'remove', trackId: t.id }), 'secondary', 'remove-' + t.id) : null))))];
     if (me && me.ready) out.push(el('p', { text: 'Ready. Waiting for the others…' }));
     else out.push(btn('Ready', () => send({ type: 'ready' })));
     out.push(el('p', { class: 'muted', text: 'Ready: ' + view.players.filter((p) => p.ready).length + '/' + view.players.length }));
