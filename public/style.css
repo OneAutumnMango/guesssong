@@ -63,7 +63,9 @@ li .grow { flex: 1; min-width: 0; }
 /* game page: the embed lives in #stage so it never moves; wrappers vanish on mobile (DOM order = visual order) */
 #embed-note { margin-bottom: 12px; font-weight: 600; }
 /* off-screen but rendered: display:none / visibility:hidden can stop playback */
-.embed-hidden { position: fixed; left: -10000px; top: 0; width: 300px; height: 80px; overflow: hidden; }
+/* Must stay INSIDE the viewport: Spotify marks its iframe loading="lazy", so one parked off-screen
+   (left:-10000px) never loads and Play silently does nothing. Invisible + unclickable instead. */
+.embed-hidden { position: fixed; right: 0; bottom: 0; width: 300px; height: 80px; overflow: hidden; opacity: 0.01; pointer-events: none; z-index: -1; }
 .embed-hidden h2 { display: none; }
 .embed-visible { background: var(--card); border-radius: 12px; padding: 16px; margin-bottom: 16px; width: 100%; }
 .embed-visible iframe { width: 100%; border: 0; display: block; }
