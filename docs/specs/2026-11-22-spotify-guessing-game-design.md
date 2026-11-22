@@ -32,7 +32,8 @@ A web game for me and my friends (not for the app store). PC and mobile browsers
 - Fetching: recents returns at most 50 tracks. Liked songs are paged, and a random sample is taken. Duplicate tracks are removed, and the picks are capped to what a player actually has.
 - The server is the authority on timing and scoring. It records each guess's arrival time and ignores guesses after the deadline. Clients only render.
 - Hosting: runs as a Docker container and is exposed over HTTPS with a Cloudflare Tunnel (`https://guesssong.mang0.uk`, redirect URI `https://guesssong.mang0.uk/callback`). Config comes from env vars (`SPOTIFY_CLIENT_ID`, `PUBLIC_URL`, `PORT` default 3000), never baked into the image.
-- Release: pushing a git tag (`v*`) builds the image and pushes it to GitHub Container Registry (`ghcr.io/<owner>/guesssong`) through GitHub Actions.
+- Release: pushing a git tag (`v*`) builds the image and pushes it to GitHub Container Registry (`ghcr.io/<owner>/guesssong`) through GitHub Actions. The image is only built if the test workflow passes for that tag.
+- CI: a test workflow (`npm ci && npm test`) runs on every push to `main` and on pull requests, and is reused by the release workflow. Blocking merges on a failing check needs branch protection on `main` (a GitHub repo setting, done by hand).
 
 ## Constraints
 
