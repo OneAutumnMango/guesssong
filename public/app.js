@@ -120,6 +120,25 @@
         el('span', { text: String(p.score) + (view.phase === 'reveal' && d[p.id] ? ' (+' + d[p.id] + ')' : '') })))));
   }
 
+  function syncQr() {
+    const img = $('qr-img'), u = $('qr-url');
+    if (!img || !u) return;
+    const src = '/qr.svg?room=' + encodeURIComponent(view.code);
+    if (img.getAttribute('src') !== src) {
+      img.hidden = false;
+      img.src = src;
+      img.alt = 'QR code to join room ' + view.code;
+    }
+    const url = typeof view.joinUrl === 'string' ? view.joinUrl : '';
+    if (u.dataset.url === url) return;
+    u.dataset.url = url;
+    if (/^https?:\/\//.test(url)) {
+      const a = el('a', { text: url, rel: 'noopener' });
+      a.href = url;
+      u.replaceChildren(a);
+    } else u.textContent = url;
+  }
+
   function syncBots() {
     const a = document.querySelector('[data-focus="add-bot"]'), r = document.querySelector('[data-focus="remove-bot"]');
     if (a) a.disabled = view.players.length >= 8;
@@ -137,6 +156,12 @@
   function lobby() {
     const out = [];
     out.push(el('section', { id: 'lobby-players' }, ...lobbyPlayers()));
+    if (typeof view.code === 'string' && view.code) {
+      const img = el('img', { id: 'qr-img', width: 200, height: 200 });
+      img.onerror = () => { img.hidden = true; };
+      out.push(el('section', { id: 'lobby-qr' }, el('h2', { text: 'Scan to join' }),
+        el('div', { class: 'qr-wrap' }, img), el('p', { id: 'qr-url', class: 'selectable' })));
+    }
     if (view.dev && isHost()) {
       out.push(el('section', { id: 'lobby-bots' }, el('h2', { text: 'Test players' }),
         btn('Add test player', () => send({ type: 'addBot' }), '', 'add-bot'),
@@ -251,6 +276,7 @@
       // keep the settings form (typing, focus) intact; only refresh the player list and idle fields
       $('lobby-players').replaceChildren(...lobbyPlayers());
       syncBots();
+      syncQr();
       const set = (id, v) => { const f = $(id); if (f && document.activeElement !== f) f[typeof v === 'boolean' ? 'checked' : 'value'] = v; };
       set('f-source', view.settings.source); set('f-total', view.settings.total);
       set('f-buffer', view.settings.buffer); set('f-hp', view.settings.hostPlays);
@@ -265,7 +291,7 @@
         if (t) t.focus();
       }
     }
-    if (view.phase === 'lobby') syncBots();
+    if (view.phase === 'lobby') { syncBots(); syncQr(); }
     lastPhase = view.phase;
     devBanner();
     syncEmbed();

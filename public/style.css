@@ -44,3 +44,7 @@ li .grow { flex: 1; min-width: 0; }
 #embed-wrap { margin-top: 16px; }
 #embed iframe { width: 100%; border: 0; }
 #dev-banner { background: var(--fg); color: var(--bg); font-size: .8rem; font-weight: 700; letter-spacing: .1em; text-align: center; padding: 4px 8px; border-radius: 6px; margin-bottom: 12px; }
+.qr-wrap { background: #fff; padding: 12px; border-radius: 10px; width: fit-content; max-width: 100%; margin: 0 auto 12px; }
+.qr-wrap img { display: block; width: 200px; height: 200px; max-width: 100%; }
+.qr-wrap img[hidden] { display: none; }
+.selectable { user-select: text; overflow-wrap: anywhere; text-align: center; }
