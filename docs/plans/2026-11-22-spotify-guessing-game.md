@@ -94,17 +94,17 @@
 **Security flag:** `security`
 **Does NOT cover:** refreshing expired tokens (a token lasts 1h, longer than a game lobby), and a true uniform sample of liked songs (see Assumptions).
 
-- [ ] **Step 1: Write failing tests** with a fake `fetchFn`
+- [x] **Step 1: Write failing tests** with a fake `fetchFn`
   - `makePkce()`: `challenge` equals base64url(SHA-256(`verifier`)), and `verifier` is 43+ characters.
   - `authUrl(...)` contains `code_challenge_method=S256`, the `state`, and both scopes.
   - `exchangeCode` POSTs form-encoded `grant_type=authorization_code`, `code_verifier` and no client secret to `https://accounts.spotify.com/api/token`, and returns `access_token`.
   - `fetchPool(t, 'recents', ...)` calls `/v1/me/player/recently-played?limit=50` and maps items to `Track` (`uri` = `spotify:track:<id>`).
   - `fetchPool(t, 'liked', ...)` with `total: 400` first calls `/v1/me/tracks?limit=1`, then fetches at most 5 distinct random 50-item pages, and returns the union.
   - A 403 response makes `exchangeCode`/`fetchProfile`/`fetchPool` throw `SpotifyError` with `status 403`.
-- [ ] **Step 2:** Run `npm test`. Expected: FAIL.
-- [ ] **Step 3: Implement** in `src/spotify.js` using global `fetch` (injectable via the `fetchFn` parameter) and `node:crypto`. Throw `SpotifyError(response.status, <body text>)` on any non-2xx response. Liked page offsets are chosen from `ceil(total / 50)` pages without repeats.
-- [ ] **Step 4:** Run `npm test`. Expected: PASS.
-- [ ] **Step 5: Commit** `git add src/spotify.js test/spotify.test.js && git commit -m "Add Spotify client"`
+- [x] **Step 2:** Run `npm test`. Expected: FAIL.
+- [x] **Step 3: Implement** in `src/spotify.js` using global `fetch` (injectable via the `fetchFn` parameter) and `node:crypto`. Throw `SpotifyError(response.status, <body text>)` on any non-2xx response. Liked page offsets are chosen from `ceil(total / 50)` pages without repeats.
+- [x] **Step 4:** Run `npm test`. Expected: PASS.
+- [x] **Step 5: Commit** `git add src/spotify.js test/spotify.test.js && git commit -m "Add Spotify client"`
 
 ---
 
@@ -138,7 +138,7 @@
 **Security flag:** `none`
 **Does NOT cover:** reconnect timeouts, host migration if the host never returns, or replacement of removed songs (spec says none).
 
-- [ ] **Step 1: Write failing tests** (fake `now`, deterministic `rng`)
+- [x] **Step 1: Write failing tests** (fake `now`, deterministic `rng`)
   - Adding a 9th player throws.
   - `start` with pools `{a: 50 tracks, b: 50 tracks}`, total 12 gives each player 6 tracks, and `phase === 'review'`.
   - `start` with `b: []` throws `'<b's name> has no songs'`.
@@ -150,10 +150,10 @@
   - `allGuessed()` is true once every non-owner guesser has guessed.
   - `view(x).reveal` is undefined while `playing`, and `view` never contains `ownerId` before `reveal`.
   - `next()` after the last round gives `phase === 'finished'`.
-- [ ] **Step 2:** Run `npm test`. Expected: FAIL.
-- [ ] **Step 3: Implement** `Game` in `src/game.js`, with no I/O and no timers. Keep each guess's elapsed time at `now() - roundStart`.
-- [ ] **Step 4:** Run `npm test`. Expected: PASS.
-- [ ] **Step 5: Commit** `git add src/game.js test/game.test.js && git commit -m "Add game state machine"`
+- [x] **Step 2:** Run `npm test`. Expected: FAIL.
+- [x] **Step 3: Implement** `Game` in `src/game.js`, with no I/O and no timers. Keep each guess's elapsed time at `now() - roundStart`.
+- [x] **Step 4:** Run `npm test`. Expected: PASS.
+- [x] **Step 5: Commit** `git add src/game.js test/game.test.js && git commit -m "Add game state machine"`
 
 ---
 
