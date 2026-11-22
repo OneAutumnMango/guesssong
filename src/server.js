@@ -18,7 +18,7 @@ const STATE_TTL = 10 * 60 * 1000;
 const ABANDON_TTL = 30 * 60 * 1000;
 const LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json' };
-const HOST_ONLY = new Set(['settings', 'start', 'play', 'next', 'addBot', 'removeBot']);
+const HOST_ONLY = new Set(['settings', 'start', 'play', 'next', 'addBot', 'removeBot', 'pause', 'resume', 'reveal']);
 const defaultPublic = fileURLToPath(new URL('../public', import.meta.url));
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -55,6 +55,7 @@ export function createServer({ clientId, publicUrl: rawPublicUrl, spotify = real
   }
 
   // Dev mode only: each test player guesses once, at a random time, at a random other player.
+  // Dev only: bot guess timers are deliberately not paused by pauseRound.
   function scheduleBots(code, room) {
     const [min, max] = botDelayMs;
     for (const id of room.bots) {
@@ -92,6 +93,12 @@ export function createServer({ clientId, publicUrl: rawPublicUrl, spotify = real
     ws.rtts.push(performance.now() - sent);
     if (ws.rtts.length > 5) ws.rtts.shift();
     ws.rtt = Math.min(...ws.rtts);
+  }
+
+  // A round stays open a fixed extra time for in-flight guesses while a connected human can still guess.
+  function graceFor(room) {
+    for (const e of room.players.values()) if (e.socket && room.game.guessProblem(e.id) === null) return GRACE_MS;
+    return 0;
   }
 
   function finishRound(code, room) {
@@ -212,16 +219,22 @@ export function createServer({ clientId, publicUrl: rawPublicUrl, spotify = real
         case 'play':
           game.beginRound();
           scheduleBots(code, room);
-          { // keep the round open a fixed 1100 ms past the nominal end so in-flight guesses of high-ping players count
-            let human = false;
-            for (const e of room.players.values()) {
-              if (!e.socket) continue;
-              sendPing(e.socket);
-              if (game.guessProblem(e.id) === null) human = true;
-            }
-            room.timer = setTimeout(() => finishRound(code, room), durationMs + (human ? GRACE_MS : 0));
-          }
+          for (const e of room.players.values()) if (e.socket) sendPing(e.socket); // fresh RTT sample for the round
+          if (game.settings.timer) room.timer = setTimeout(() => finishRound(code, room), durationMs + graceFor(room));
           break;
+        case 'pause':
+          game.pauseRound();
+          clearTimeout(room.timer);
+          break;
+        case 'resume': {
+          const left = game.resumeRound();
+          room.timer = setTimeout(() => finishRound(code, room), left + graceFor(room));
+          break;
+        }
+        case 'reveal':
+          if (game.phase !== 'playing') throw new Error('Not playing');
+          if (game.settings.timer) throw new Error('This round has a timer');
+          return finishRound(code, room);
         case 'guess':
           if (typeof m.playerId !== 'string' || !game.players.has(m.playerId)) throw new Error('Unknown player');
           { const problem = game.guessProblem(me, ws.rtt);

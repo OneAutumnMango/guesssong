@@ -189,7 +189,7 @@ test('configure validates input atomically', () => {
     assert.equal(JSON.stringify(g.settings), before);
   }
   g.configure({ perPerson: 10, buffer: 0, hostPlays: false, source: 'liked', evil: 1, total: 99 });
-  assert.deepEqual(g.settings, { source: 'liked', perPerson: 10, buffer: 0, hostPlays: false });
+  assert.deepEqual(g.settings, { source: 'liked', perPerson: 10, buffer: 0, hostPlays: false, timer: true });
   g.configure({ buffer: 3 });
   g.configure({ perPerson: 2, buffer: 1 }); // valid together although the old buffer was 3
   assert.deepEqual([g.settings.perPerson, g.settings.buffer], [2, 1]);
@@ -433,4 +433,115 @@ test('streak is in every player view and scoring is unchanged', () => {
   assert.equal(d[y], 0);
   assert.equal(d[owner], 0);
   assert.equal(g.view(x).players.find((p) => p.id === x).streak, 1);
+});
+
+// timer / pause / no timer
+const timedRound = (opts = {}) => {
+  const g = mk();
+  if (opts.untimed) g.configure({ timer: false });
+  toBetween(g);
+  g.beginRound();
+  const owner = g.queue[g.round].ownerId;
+  return { g, owner, guesser: owner === 'a' ? 'b' : 'a' };
+};
+
+test('timer setting validates and defaults to true', () => {
+  const g = mk();
+  assert.equal(g.settings.timer, true);
+  assert.throws(() => g.configure({ timer: 'no' }), /Invalid setting: timer/);
+  assert.throws(() => g.configure({ timer: 0 }), /Invalid setting: timer/);
+  g.configure({ timer: false, perPerson: 3, buffer: 1 });
+  assert.equal(g.view('a').settings.timer, false);
+  const h = mk();
+  h.start({ a: pool('a'), b: pool('b') });
+  assert.throws(() => h.configure({ timer: false }));
+});
+
+test('round view has timed/paused and remainingMs', () => {
+  const { g, guesser } = timedRound();
+  let r = g.view(guesser).round;
+  assert.deepEqual([r.timed, r.paused, r.remainingMs], [true, false, 20000]);
+  const u = timedRound({ untimed: true });
+  r = u.g.view(u.guesser).round;
+  assert.deepEqual([r.timed, r.paused, r.remainingMs], [false, false, null]);
+});
+
+test('pause freezes remaining time and elapsed; resume excludes the paused time', () => {
+  const { g, owner, guesser } = timedRound();
+  clock = 5000;
+  g.pauseRound();
+  clock = 15000;
+  const r = g.view(guesser).round;
+  assert.deepEqual([r.paused, r.remainingMs], [true, 15000]);
+  assert.equal(g.guessProblem(guesser), null);
+  g.resumeRound();
+  assert.equal(g.view(guesser).round.remainingMs, 15000);
+  assert.equal(g.view(guesser).round.paused, false);
+  assert.equal(g.guess(guesser, owner), true); // at the same moment: elapsed 5000
+  g.endRound();
+  assert.equal(g.view(owner).reveal.deltas[guesser], 875);
+});
+
+test('a guess while paused is scored from the frozen time and paused time is not "Time is up"', () => {
+  const { g, owner, guesser } = timedRound();
+  clock = 5000;
+  g.pauseRound();
+  clock = 90000;
+  assert.equal(g.guessProblem(guesser), null);
+  assert.equal(g.guess(guesser, owner), true);
+  g.endRound();
+  assert.equal(g.view(owner).reveal.deltas[guesser], 875);
+  assert.equal(g.view(owner).round.paused, false); // ended while paused: state cleaned up
+});
+
+test('pause still rejects a guess whose frozen elapsed already exceeds the duration', () => {
+  const { g, guesser } = timedRound();
+  clock = 20001;
+  g.pauseRound();
+  assert.equal(g.guessProblem(guesser), 'Time is up');
+});
+
+test('several pause/resume cycles accumulate', () => {
+  const { g, owner, guesser } = timedRound();
+  clock = 5000; g.pauseRound();
+  clock = 10000; g.resumeRound(); // 5 s paused
+  clock = 12000; g.pauseRound();
+  clock = 20000; g.resumeRound(); // 8 s paused
+  assert.equal(g.view(guesser).round.remainingMs, 13000);
+  assert.equal(g.guess(guesser, owner), true); // elapsed 20000 - 13000 = 7000
+  g.endRound();
+  assert.equal(g.view(owner).reveal.deltas[guesser], Math.round(1000 - 500 * (7000 / 20000)));
+});
+
+test('pause/resume errors and a new round starts unpaused', () => {
+  const { g } = timedRound();
+  assert.throws(() => g.resumeRound(), /Not paused/);
+  g.pauseRound();
+  assert.throws(() => g.pauseRound(), /Already paused/);
+  g.endRound();
+  assert.throws(() => g.pauseRound(), /Not playing/);
+  g.next();
+  g.beginRound();
+  assert.equal(g.view('a').round.paused, false);
+  const u = timedRound({ untimed: true }).g;
+  assert.throws(() => u.pauseRound(), /This round has no timer/);
+  assert.throws(() => u.resumeRound(), /This round has no timer/);
+});
+
+test('no timer: never "Time is up", flat 1000 for correct, 0 for wrong', () => {
+  const { g, owner, guesser } = timedRound({ untimed: true });
+  clock = 10 * 60 * 1000;
+  assert.equal(g.guessProblem(guesser), null);
+  assert.equal(g.guess(guesser, owner), true);
+  assert.equal(g.allGuessed(), true);
+  g.endRound();
+  assert.equal(g.view(owner).reveal.deltas[guesser], 1000);
+  g.next();
+  g.beginRound();
+  const o2 = g.queue[g.round].ownerId;
+  const x = o2 === 'a' ? 'b' : 'a';
+  clock += 123456;
+  g.guess(x, 'zz');
+  g.endRound();
+  assert.equal(g.view(o2).reveal.deltas[x], 0);
 });

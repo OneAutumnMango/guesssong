@@ -962,11 +962,104 @@ test('default settings: review view carries keep/removalsLeft and players carry 
     const { hc } = await pair(t);
     hc.send({ type: 'start' });
     const v = (await hc.phase('review')).view;
-    assert.deepEqual(v.settings, { source: 'recents', perPerson: 4, buffer: 1, hostPlays: true });
+    assert.deepEqual(v.settings, { source: 'recents', perPerson: 4, buffer: 1, hostPlays: true, timer: true });
     assert.equal(v.myTracks.length, 4);
     assert.equal(v.keep, 3);
     assert.equal(v.removalsLeft, 1);
     assert.ok(v.players.every((p) => p.streak === 0));
+  } finally {
+    await t.close();
+  }
+});
+
+// timer pause / no timer over the websocket
+async function startedPair(t, settings = {}) {
+  const p = await pair(t);
+  p.hc.send({ type: 'settings', settings: { perPerson: 2, buffer: 0, ...settings } });
+  p.hc.send({ type: 'start' });
+  await p.hc.phase('review');
+  p.hc.send({ type: 'ready' });
+  p.jc.send({ type: 'ready' });
+  await p.hc.phase('between');
+  p.game = t.server.rooms.get(p.code).game;
+  return p;
+}
+const errMsg = (c, re) => c.until((m) => m.type === 'error' && re.test(m.message));
+
+test('pause keeps the round open past the deadline; resume reschedules the end', async () => {
+  const t = await boot(300);
+  try {
+    const { hc, jc, game } = await startedPair(t);
+    hc.send({ type: 'pause' });
+    await errMsg(hc, /Not playing/);
+    hc.send({ type: 'play' });
+    await hc.phase('playing');
+    jc.send({ type: 'pause' });
+    await errMsg(jc, /host/i);
+    hc.send({ type: 'resume' });
+    await errMsg(hc, /Not paused/);
+    hc.send({ type: 'reveal' });
+    await errMsg(hc, /This round has a timer/);
+    hc.send({ type: 'pause' });
+    const ps = await hc.until((m) => m.type === 'state' && m.view.round.paused);
+    assert.equal(ps.view.round.timed, true);
+    hc.send({ type: 'pause' });
+    await errMsg(hc, /Already paused/);
+    await new Promise((r) => setTimeout(r, 2000)); // well past 300 + 1100
+    assert.equal(game.phase, 'playing');
+    const frozen = game.view('H').round.remainingMs;
+    assert.ok(frozen > 150 && frozen <= 300, `remaining ${frozen}`);
+    const t0 = performance.now();
+    hc.send({ type: 'resume' });
+    await hc.phase('reveal');
+    const dt = performance.now() - t0;
+    assert.ok(dt >= 1200 && dt <= 1900, `ended ${dt}ms after resume`); // remaining (~280) + 1100 grace
+  } finally {
+    await t.close();
+  }
+});
+
+test('no timer: round lasts until everyone guessed or the host reveals', async () => {
+  const t = await boot(300);
+  try {
+    const { hc, jc, game } = await startedPair(t, { timer: false });
+    hc.send({ type: 'play' });
+    const pl = await hc.phase('playing');
+    assert.deepEqual([pl.view.round.timed, pl.view.round.remainingMs], [false, null]);
+    await new Promise((r) => setTimeout(r, 1800));
+    assert.equal(game.phase, 'playing'); // no timer fired
+    hc.send({ type: 'pause' });
+    await errMsg(hc, /no timer/);
+    jc.send({ type: 'reveal' });
+    await errMsg(jc, /host/i);
+    hc.send({ type: 'reveal' });
+    await hc.phase('reveal');
+    hc.send({ type: 'next' });
+    await hc.phase('between');
+    hc.send({ type: 'play' });
+    await hc.phase('playing');
+    const owner = game.queue[game.round].ownerId;
+    const guesser = owner === 'H' ? jc : hc;
+    guesser.send({ type: 'guess', playerId: owner });
+    const rev = await hc.phase('reveal'); // early end, flat score
+    assert.equal(rev.view.reveal.deltas[owner === 'H' ? 'J' : 'H'], 1000);
+  } finally {
+    await t.close();
+  }
+});
+
+test('dev: untimed round with only test players still ends', async () => {
+  const t = await boot(300, { opts: devOpts });
+  try {
+    const { hc } = await devHost(t, false);
+    hc.send({ type: 'addBot' });
+    hc.send({ type: 'addBot' });
+    await players(hc, 3);
+    hc.send({ type: 'settings', settings: { timer: false, perPerson: 1, buffer: 0 } });
+    hc.send({ type: 'start' });
+    await hc.phase('between');
+    hc.send({ type: 'play' });
+    await hc.until((m) => m.type === 'state' && m.view.phase === 'reveal', 2500);
   } finally {
     await t.close();
   }

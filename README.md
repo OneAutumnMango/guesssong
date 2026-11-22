@@ -81,6 +81,10 @@ Permanent: create a named tunnel and route `guesssong.mang0.uk` to `http://local
 
 Songs dealt per player = min(songs per person, smallest player pool after removing duplicates); each player keeps that minus the removals.
 
+No timer: the host can turn the round timer off. Rounds then end when everyone has guessed or the host presses "Reveal now", and a correct guess scores a flat 1000.
+
+Pause: while the host pauses the music, the round timer is paused too. The countdown freezes, paused time does not count against anyone's speed, and guesses are still accepted. Resuming restarts the timer (test players in dev mode keep guessing while paused).
+
 Streaks: players with 2 or more correct guesses in a row get a 🔥 next to their name. Wrong or missing guesses reset it; the song's owner and a non-playing host keep their streak. Streaks are display only and never change scoring.
 
 ## Releasing

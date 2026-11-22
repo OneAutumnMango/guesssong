@@ -9,7 +9,7 @@ export class Game {
     this.rng = rng;
     this.durationMs = durationMs;
     this.phase = 'lobby';
-    this.settings = { source: 'recents', perPerson: 4, buffer: 1, hostPlays: true };
+    this.settings = { source: 'recents', perPerson: 4, buffer: 1, hostPlays: true, timer: true };
     this.hostId = null;
     this.deadline = null;
     this.players = new Map(); // id -> { id, name, connected, score }
@@ -22,6 +22,7 @@ export class Game {
     this.ready = new Set();
     this.guesses = new Map(); // playerId -> { id, elapsed }
     this.roundStart = null;
+    this.pausedAt = null; // monotonic moment the round clock was paused, or null
     this.deltas = {};
   }
 
@@ -50,6 +51,7 @@ export class Game {
       perPerson: (v) => Number.isInteger(v) && v >= 1 && v <= 25,
       buffer: (v) => Number.isInteger(v) && v >= 0 && v <= 20,
       hostPlays: (v) => typeof v === 'boolean',
+      timer: (v) => typeof v === 'boolean',
     };
     const next = {};
     for (const k of Object.keys(ok)) {
@@ -137,8 +139,31 @@ export class Game {
     this.guesses.clear();
     this.deltas = {};
     this.roundStart = this.now();
-    this.deadline = this.roundStart + this.durationMs;
+    this.pausedAt = null;
+    this.deadline = this.settings.timer ? this.roundStart + this.durationMs : null;
     this.phase = 'playing';
+  }
+
+  #timedRound() {
+    if (this.phase !== 'playing') throw new Error('Not playing');
+    if (!this.settings.timer) throw new Error('This round has no timer');
+  }
+
+  pauseRound() {
+    this.#timedRound();
+    if (this.pausedAt !== null) throw new Error('Already paused');
+    this.pausedAt = this.now();
+  }
+
+  // Returns the time left on the nominal deadline so the caller can reschedule its end-of-round timer.
+  resumeRound() {
+    this.#timedRound();
+    if (this.pausedAt === null) throw new Error('Not paused');
+    const paused = this.now() - this.pausedAt;
+    this.roundStart += paused;
+    this.deadline += paused;
+    this.pausedAt = null;
+    return Math.max(0, this.deadline - this.now());
   }
 
   #guessers() {
@@ -154,12 +179,12 @@ export class Game {
     if (this.queue[this.round].ownerId === playerId) return 'This is your song, sit this round out';
     if (!this.#guessers().includes(playerId)) return 'You are not guessing this round';
     if (this.guesses.has(playerId)) return 'You already locked in a guess';
-    return this.#elapsed(latencyMs) > this.durationMs ? 'Time is up' : null;
+    return this.settings.timer && this.#elapsed(latencyMs) > this.durationMs ? 'Time is up' : null;
   }
 
   #elapsed(latencyMs) {
     const lat = Number.isFinite(latencyMs) ? Math.min(1000, Math.max(0, latencyMs)) : 0;
-    return this.now() - this.roundStart - lat;
+    return (this.pausedAt ?? this.now()) - this.roundStart - lat; // frozen while paused
   }
 
   guess(playerId, guessedId, latencyMs = 0) {
@@ -182,10 +207,11 @@ export class Game {
       p.streak = g && g.id === ownerId ? p.streak + 1 : 0;
     }
     for (const [id, g] of this.guesses) {
-      const d = scoreFor(g.id === ownerId, g.elapsed, this.durationMs);
+      const d = scoreFor(g.id === ownerId, g.elapsed, this.settings.timer ? this.durationMs : Infinity) // no timer: flat 1000;
       this.deltas[id] = d;
       this.players.get(id).score += d;
     }
+    this.pausedAt = null;
     this.phase = 'reveal';
   }
 
@@ -210,7 +236,8 @@ export class Game {
       v.keep = this.keep;
     }
     if (['between', 'playing', 'reveal'].includes(this.phase)) {
-      v.round = { index: this.round, total: this.queue.length, remainingMs: this.deadline == null ? null : Math.max(0, this.deadline - this.now()), guessedCount: this.guesses.size };
+      v.round = { index: this.round, total: this.queue.length, remainingMs: this.settings.timer && this.deadline != null ? Math.max(0, this.deadline - (this.pausedAt ?? this.now())) : null,
+        guessedCount: this.guesses.size, paused: this.pausedAt !== null, timed: this.settings.timer };
       if (playerId === this.hostId) v.nextUri = this.queue[this.round].track.uri;
     }
     if (this.phase === 'playing' && this.queue[this.round].ownerId === playerId) v.iOwnThisSong = true;
