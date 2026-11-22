@@ -22,11 +22,16 @@ export class Game {
     this.deltas = {};
   }
 
-  addPlayer(id, name, isHost = false) {
+  addPlayer(id, name, isHost = false, bot = false) {
     if (this.phase !== 'lobby') throw new Error('Game already started');
     if (this.players.size >= MAX_PLAYERS) throw new Error('Room is full');
-    this.players.set(id, { id, name, connected: true, score: 0 });
+    this.players.set(id, { id, name, connected: true, score: 0, bot });
     if (isHost) this.hostId = id;
+  }
+
+  removePlayer(id) {
+    if (this.phase !== 'lobby') throw new Error('Game already started');
+    this.players.delete(id);
   }
 
   setConnected(id, connected) {

@@ -14,14 +14,14 @@ const STATE_TTL = 10 * 60 * 1000;
 const ABANDON_TTL = 30 * 60 * 1000;
 const LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json' };
-const HOST_ONLY = new Set(['settings', 'start', 'play', 'next']);
+const HOST_ONLY = new Set(['settings', 'start', 'play', 'next', 'addBot', 'removeBot']);
 const defaultPublic = fileURLToPath(new URL('../public', import.meta.url));
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
-export function createServer({ clientId, publicUrl, spotify = realSpotify, durationMs = 20000, publicDir = defaultPublic, fetchTimeoutMs = 15000, pingMs = 30000 }) {
+export function createServer({ clientId, publicUrl, spotify = realSpotify, durationMs = 20000, publicDir = defaultPublic, fetchTimeoutMs = 15000, pingMs = 30000, devMode = false, botDelayMs = [2000, 15000] }) {
   const pending = new Map(); // state -> { verifier, room, createdAt }
-  const rooms = new Map(); // code -> { game, players: Map<key,{id,token,socket}>, timer, starting, emptySince }
+  const rooms = new Map(); // code -> { game, players: Map<key,{id,token,socket}>, bots: ids, botTimers: Set, botN, timer, starting, emptySince }
   const redirectUri = publicUrl + '/callback';
   const root = resolve(publicDir);
 
@@ -29,10 +29,11 @@ export function createServer({ clientId, publicUrl, spotify = realSpotify, durat
 
   function broadcast(code, room) {
     for (const p of room.players.values()) {
-      if (p.socket) send(p.socket, { type: 'state', view: { ...room.game.view(p.id), code } });
+      if (p.socket) send(p.socket, { type: 'state', view: { ...room.game.view(p.id), code, ...(devMode && { dev: true }) } });
     }
     if (room.game.phase === 'finished') { // final state already sent above
       clearTimeout(room.timer);
+      clearBots(room);
       rooms.delete(code);
       for (const p of room.players.values()) p.socket?.close(1000);
     }
@@ -43,8 +44,33 @@ export function createServer({ clientId, publicUrl, spotify = realSpotify, durat
     try { room.game.checkReady(); } catch (e) { console.error('checkReady failed:', e.message); }
   }
 
+  function clearBots(room) {
+    for (const t of room.botTimers) clearTimeout(t);
+    room.botTimers.clear();
+  }
+
+  // Dev mode only: each test player guesses once, at a random time, at a random other player.
+  function scheduleBots(code, room) {
+    const [min, max] = botDelayMs;
+    for (const id of room.bots) {
+      const t = setTimeout(() => {
+        room.botTimers.delete(t);
+        try {
+          const { game } = room;
+          if (game.phase !== 'playing') return;
+          const others = [...game.players.keys()].filter((x) => x !== id);
+          if (!game.guess(id, others[Math.floor(Math.random() * others.length)])) return;
+          if (game.allGuessed()) finishRound(code, room); else broadcast(code, room);
+        } catch { /* illegal or late guess: ignore */ }
+      }, min + Math.random() * (max - min));
+      t.unref();
+      room.botTimers.add(t);
+    }
+  }
+
   function finishRound(code, room) {
     clearTimeout(room.timer);
+    clearBots(room);
     if (room.game.phase !== 'playing') return; // guards double endRound
     room.game.endRound();
     broadcast(code, room);
@@ -55,7 +81,7 @@ export function createServer({ clientId, publicUrl, spotify = realSpotify, durat
     room.starting = true;
     try {
       const { game } = room;
-      const ids = game.participants();
+      const ids = game.participants().filter((id) => !game.players.get(id).bot);
       const withTimeout = (p) => {
         let t;
         const timer = new Promise((_, rej) => { t = setTimeout(() => rej(new Error('timeout')), fetchTimeoutMs); });
@@ -70,7 +96,14 @@ export function createServer({ clientId, publicUrl, spotify = realSpotify, durat
         if (results[i].status === 'rejected') throw new Error(`Could not load songs for ${game.players.get(id).name}`);
         pools[id] = results[i].value;
       }
+      if (room.bots.length) { // test players borrow the host's songs (or the first real player's)
+        const src = pools[game.hostId] ?? pools[ids[0]];
+        if (!src) throw new Error('No songs available for test players');
+        for (const b of room.bots) pools[b] = [...src];
+      }
       game.start(pools);
+      for (const b of room.bots) game.setReady(b);
+      recheck(room);
       for (const p of room.players.values()) p.token = null; // tokens never outlive a successful start
     } finally {
       room.starting = false;
@@ -116,6 +149,21 @@ export function createServer({ clientId, publicUrl, spotify = realSpotify, durat
         case 'start':
           await doStart(code, room);
           break;
+        case 'addBot':
+        case 'removeBot': {
+          if (!devMode) throw new Error('Dev mode is off');
+          if (room.starting) throw new Error('Game is starting');
+          if (m.type === 'addBot') {
+            const n = room.botN + 1;
+            game.addPlayer(`bot-${n}`, `Test ${n}`, false, true);
+            room.botN = n;
+            room.bots.push(`bot-${n}`);
+          } else {
+            if (!room.bots.length) throw new Error('No test players to remove');
+            game.removePlayer(room.bots.pop());
+          }
+          break;
+        }
         case 'remove':
           if (typeof m.trackId !== 'string') throw new Error('Bad trackId');
           game.removeTrack(me, m.trackId);
@@ -125,6 +173,7 @@ export function createServer({ clientId, publicUrl, spotify = realSpotify, durat
           break;
         case 'play':
           game.beginRound();
+          scheduleBots(code, room);
           room.timer = setTimeout(() => finishRound(code, room), durationMs);
           break;
         case 'guess':
@@ -209,7 +258,7 @@ export function createServer({ clientId, publicUrl, spotify = realSpotify, durat
     if (roomCode === 'new') {
       if (rooms.size >= MAX_ROOMS) return page(res, 503, 'The server is full right now. Try again later.');
       do { roomCode = Array.from({ length: 4 }, () => LETTERS[randomInt(LETTERS.length)]).join(''); } while (rooms.has(roomCode));
-      room = { game: new Game({ durationMs }), players: new Map(), timer: null, starting: false, emptySince: Date.now() };
+      room = { game: new Game({ durationMs }), players: new Map(), bots: [], botTimers: new Set(), botN: 0, timer: null, starting: false, emptySince: Date.now() };
       rooms.set(roomCode, room);
     } else {
       room = rooms.get(roomCode);
@@ -278,13 +327,13 @@ export function createServer({ clientId, publicUrl, spotify = realSpotify, durat
     const now = Date.now();
     for (const [s, p] of pending) if (now - p.createdAt > STATE_TTL) pending.delete(s);
     for (const [code, r] of rooms) {
-      if (r.emptySince && now - r.emptySince > ABANDON_TTL) { clearTimeout(r.timer); rooms.delete(code); }
+      if (r.emptySince && now - r.emptySince > ABANDON_TTL) { clearTimeout(r.timer); clearBots(r); rooms.delete(code); }
     }
   }, 60000);
   sweep.unref();
   server.on('close', () => {
     clearInterval(sweep);
-    for (const r of rooms.values()) clearTimeout(r.timer);
+    for (const r of rooms.values()) { clearTimeout(r.timer); clearBots(r); }
     wss.close();
   });
 
@@ -296,6 +345,16 @@ export function createServer({ clientId, publicUrl, spotify = realSpotify, durat
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const { SPOTIFY_CLIENT_ID, PUBLIC_URL, PORT = '3000' } = process.env;
   if (!SPOTIFY_CLIENT_ID || !PUBLIC_URL) { console.error('SPOTIFY_CLIENT_ID and PUBLIC_URL are required'); process.exit(1); }
-  const server = createServer({ clientId: SPOTIFY_CLIENT_ID, publicUrl: PUBLIC_URL.replace(/\/$/, '') }).listen(Number(PORT));
+  const devMode = process.env.DEV_MODE === '1';
+  if (devMode) {
+    let host = '';
+    try { host = new URL(PUBLIC_URL).hostname; } catch { /* refused below */ }
+    if (host !== '127.0.0.1' && host !== 'localhost') {
+      console.error('DEV_MODE=1 refused: dev mode only runs when PUBLIC_URL is on 127.0.0.1 or localhost');
+      process.exit(1);
+    }
+    console.error('DEV MODE ON: test players enabled, never run this in production');
+  }
+  const server = createServer({ clientId: SPOTIFY_CLIENT_ID, publicUrl: PUBLIC_URL.replace(/\/$/, ''), devMode }).listen(Number(PORT));
   for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 2000).unref(); }); // open websockets would delay close
 }

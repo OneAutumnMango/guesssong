@@ -32,6 +32,21 @@ npm start
 
 `npm start` is plain `node src/server.js` and reads env vars only. Node 18 has no `--env-file`; on Node 20.6+ you can run `node --env-file=.env src/server.js` instead.
 
+## Local testing
+
+Dev mode lets you play a whole game alone with your own Spotify account. The host can add "test players" in the lobby; they borrow songs from your library and guess randomly.
+
+```sh
+npm run dev      # or: bash scripts/dev.sh
+```
+
+- Open http://127.0.0.1:3000 (not `localhost`).
+- Add `http://127.0.0.1:3000/callback` as a redirect URI in the Spotify app. Spotify allows plain http for the `127.0.0.1` loopback literal, but not for `localhost`.
+- `scripts/dev.sh` loads your env file if present, sets `PUBLIC_URL` to `http://127.0.0.1:${PORT:-3000}` and `DEV_MODE=1`.
+- In the lobby the host can add and remove test players (up to 8 players in total). Test players take their songs from your own library and guess randomly 2-15 seconds after Play.
+- The server refuses to start with `DEV_MODE=1` on any public URL, and the Docker image never sets it.
+- Testing the audio embed on a phone needs a tunnel and is out of scope for dev mode.
+
 ## Run with Docker
 
 ```sh

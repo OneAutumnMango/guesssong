@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import net from 'node:net';
+import { spawn } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -473,8 +474,115 @@ test('unknown key gets an error then a clean close', async () => {
     const closed = new Promise((r) => c.ws.on('close', (code) => r(code)));
     c.send({ type: 'hello', key: 'nope' });
     assert.match((await c.err()).message, /Unknown key/);
-    assert.equal(await closed, 1000);
+    const code = await Promise.race([closed, new Promise((r) => setTimeout(() => r('timeout'), 1000))]);
+    assert.equal(code, 1000);
   } finally {
     await t.close();
   }
+});
+
+test('key rotation re-checks readiness', async () => {
+  const t = await boot();
+  try {
+    const { hc, code } = await pair(t);
+    hc.send({ type: 'start' });
+    await hc.phase('review');
+    hc.send({ type: 'ready' });
+    await hc.until((m) => m.type === 'state' && m.view.players.find((p) => p.id === 'H').ready);
+    await t.login(code, 'J'); // J logs in again; its old socket closes under a deleted key
+    await hc.phase('between');
+  } finally {
+    await t.close();
+  }
+});
+
+test('dev mode off: addBot is refused', async () => {
+  const t = await boot();
+  try {
+    const h = await t.login('new', 'H');
+    const hc = await t.connect(h.key);
+    const first = await hc.until((m) => m.type === 'state');
+    assert.ok(!first.view.dev);
+    hc.send({ type: 'addBot' });
+    assert.match((await hc.err()).message, /Dev mode is off/);
+    hc.send({ type: 'removeBot' });
+    assert.match((await hc.err()).message, /Dev mode is off/);
+    assert.equal(t.server.rooms.values().next().value.game.players.size, 1);
+  } finally {
+    await t.close();
+  }
+});
+
+test('dev mode: solo host plays a full game with test players', async () => {
+  const t = await boot(5000, { opts: { devMode: true, botDelayMs: [10, 40] } });
+  try {
+    const h = await t.login('new', 'H');
+    const hc = await t.connect(h.key);
+    const first = await hc.until((m) => m.type === 'state');
+    assert.equal(first.view.dev, true);
+    const code = first.view.code;
+    const room = t.server.rooms.get(code);
+    hc.send({ type: 'addBot' });
+    hc.send({ type: 'addBot' });
+    const s3 = await hc.until((m) => m.type === 'state' && m.view.players.length === 3);
+    assert.deepEqual(s3.view.players.map((p) => p.bot), [false, true, true]);
+    assert.ok(s3.view.players.every((p) => p.connected));
+    hc.send({ type: 'removeBot' });
+    await hc.until((m) => m.type === 'state' && m.view.players.length === 2);
+    assert.ok(!room.game.players.has('bot-2'));
+    hc.send({ type: 'addBot' });
+    for (let i = 0; i < 5; i++) hc.send({ type: 'addBot' }); // reaches 8, the 9th is refused
+    await hc.until((m) => m.type === 'state' && m.view.players.length === 8);
+    hc.send({ type: 'addBot' });
+    assert.match((await hc.err()).message, /full/i);
+    for (let i = 0; i < 5; i++) hc.send({ type: 'removeBot' });
+    await hc.until((m) => m.type === 'state' && m.view.players.length === 3);
+
+    hc.send({ type: 'settings', settings: { total: 6, buffer: 0 } });
+    hc.send({ type: 'start' });
+    const rv = await hc.phase('review'); // only the host's pool was fetched
+    assert.equal(rv.view.myTracks.length, 2);
+    hc.send({ type: 'ready' }); // bots are already ready
+    await hc.phase('between');
+
+    let rounds = 0;
+    for (;;) {
+      const t0 = Date.now();
+      hc.send({ type: 'play' });
+      hc.send({ type: 'guess', playerId: 'bot-1' }); // rejected when the host owns the song
+      const rev = await hc.phase('reveal');
+      assert.ok(Date.now() - t0 < 2000, 'round should end early once everyone guessed');
+      assert.ok(rev.view.reveal.deltas);
+      rounds++;
+      hc.send({ type: 'next' });
+      const nx = await hc.until((m) => m.type === 'state' && (m.view.phase === 'between' || m.view.phase === 'finished'));
+      if (nx.view.phase === 'finished') break;
+    }
+    assert.equal(rounds, 6);
+    assert.equal(t.server.rooms.size, 0);
+    assert.equal(room.botTimers.size, 0);
+  } finally {
+    await t.close();
+  }
+});
+
+test('DEV_MODE entry point refuses public URLs and accepts loopback', async () => {
+  const run = (url, port = '0') => spawn(process.execPath, ['src/server.js'], {
+    cwd: new URL('..', import.meta.url).pathname,
+    env: { PATH: process.env.PATH, DEV_MODE: '1', PUBLIC_URL: url, SPOTIFY_CLIENT_ID: 'x', PORT: port },
+  });
+  const bad = run('https://example.com');
+  let err = '';
+  bad.stderr.on('data', (d) => (err += d));
+  const code = await new Promise((r) => bad.on('close', r));
+  assert.notEqual(code, 0);
+  assert.match(err, /dev mode/i);
+
+  const good = run('http://127.0.0.1:0');
+  let gerr = '';
+  good.stderr.on('data', (d) => (gerr += d));
+  const exited = await Promise.race([new Promise((r) => good.on('close', () => r(true))), new Promise((r) => setTimeout(() => r(false), 700))]);
+  good.kill();
+  assert.equal(exited, false, gerr);
+  assert.match(gerr, /DEV MODE ON/);
 });
