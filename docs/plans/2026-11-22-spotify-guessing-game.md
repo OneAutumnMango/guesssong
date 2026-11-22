@@ -227,8 +227,8 @@
 
 **Security flag:** `none`
 
-- [ ] **Step 1: Add a `src/main.js`** (or an `if main` block in `server.js`) that reads those env vars and calls `createServer(...).listen(PORT)`, and a `"start"` script in `package.json`. It exits with a clear message if `SPOTIFY_CLIENT_ID` or `PUBLIC_URL` is missing.
-- [ ] **Step 2: Write `README.md`** with these steps:
+- [x] **Step 1: Add a `src/main.js`** (or an `if main` block in `server.js`) that reads those env vars and calls `createServer(...).listen(PORT)`, and a `"start"` script in `package.json`. It exits with a clear message if `SPOTIFY_CLIENT_ID` or `PUBLIC_URL` is missing.
+- [x] **Step 2: Write `README.md`** with these steps:
   1. Create a Spotify app and add `<PUBLIC_URL>/callback` as the redirect URI.
   2. Add each friend's Spotify email under User Management (development mode, 25 user cap).
   3. Run `cloudflared tunnel --url http://localhost:3000`, then `SPOTIFY_CLIENT_ID=... PUBLIC_URL=https://<tunnel>.trycloudflare.com npm start`.
@@ -240,7 +240,7 @@
   - Reload the player's page mid-game and the state restores.
   - Watch `ps`/`top` during the game: the node process stays well under 100 MB.
   - Record any failures as issues. If the embed can't play on a phone-host, report it to the user before continuing.
-- [ ] **Step 4: Commit** `git add README.md package.json src && git commit -m "Add start script and README"`
+- [x] **Step 4: Commit** `git add README.md package.json src && git commit -m "Add start script and README"`
 
 ---
 
@@ -256,9 +256,9 @@
 **Security flag:** `none`
 **Does NOT cover:** multi-arch builds (linux/amd64 only, add arm64 if the host is ARM), image signing, and deploy/restart automation.
 
-- [ ] **Step 1: `.dockerignore`** lists `node_modules`, `.env`, `.git`, `docs`, `test`.
-- [ ] **Step 2: `Dockerfile`**: `FROM node:22-alpine`, `WORKDIR /app`, copy `package*.json`, `RUN npm ci --omit=dev`, copy `src` and `public`, `ENV PORT=3000`, `EXPOSE 3000`, `USER node`, `CMD ["node", "src/main.js"]` (it must NOT use `--env-file`, since there is no `.env` in the image).
-- [ ] **Step 3: `.github/workflows/release.yml`**: trigger `on: push: tags: ['v*']`; permissions `contents: read`, `packages: write`; steps: `actions/checkout`, `docker/login-action` (registry `ghcr.io`, username `${{ github.actor }}`, password `${{ secrets.GITHUB_TOKEN }}`), `docker/metadata-action` (images `ghcr.io/${{ github.repository }}`, tags from the git tag plus `latest`), `docker/build-push-action` (`push: true`). The image name must be lowercase.
-- [ ] **Step 4: Verify locally**: `docker build -t guesssong .`, then `docker run --rm -p 3000:3000 -e SPOTIFY_CLIENT_ID=x -e PUBLIC_URL=http://localhost:3000 guesssong`. Expected: `curl -s localhost:3000/` returns the index page, and `docker image ls guesssong` shows a small image. Also run it with no env vars. Expected: exits with the missing-variable message.
-- [ ] **Step 5: Verify release**: push a tag (`git tag v0.1.0 && git push origin v0.1.0`) once the repo is on GitHub. Expected: the Actions run succeeds and the package appears under the repo's Packages. (The user pushes this tag. Do not push without asking.)
-- [ ] **Step 6: Commit** `git add Dockerfile .dockerignore .github && git commit -m "Add Docker image and ghcr release workflow"`
+- [x] **Step 1: `.dockerignore`** lists `node_modules`, `.env`, `.git`, `docs`, `test`.
+- [x] **Step 2: `Dockerfile`**: `FROM node:22-alpine`, `WORKDIR /app`, copy `package*.json`, `RUN npm ci --omit=dev`, copy `src` and `public`, `ENV PORT=3000`, `EXPOSE 3000`, `USER node`, `CMD ["node", "src/main.js"]` (it must NOT use `--env-file`, since there is no `.env` in the image).
+- [x] **Step 3: `.github/workflows/release.yml`**: trigger `on: push: tags: ['v*']`; permissions `contents: read`, `packages: write`; steps: `actions/checkout`, `docker/login-action` (registry `ghcr.io`, username `${{ github.actor }}`, password `${{ secrets.GITHUB_TOKEN }}`), `docker/metadata-action` (images `ghcr.io/${{ github.repository }}`, tags from the git tag plus `latest`), `docker/build-push-action` (`push: true`). The image name must be lowercase.
+- [x] **Step 4: Verify locally**: `docker build -t guesssong .`, then `docker run --rm -p 3000:3000 -e SPOTIFY_CLIENT_ID=x -e PUBLIC_URL=http://localhost:3000 guesssong`. Expected: `curl -s localhost:3000/` returns the index page, and `docker image ls guesssong` shows a small image. Also run it with no env vars. Expected: exits with the missing-variable message.
+- [x] **Step 5: Verify release**: push a tag (`git tag v0.1.0 && git push origin v0.1.0`) once the repo is on GitHub. Expected: the Actions run succeeds and the package appears under the repo's Packages. (The user pushes this tag. Do not push without asking.)
+- [x] **Step 6: Commit** `git add Dockerfile .dockerignore .github && git commit -m "Add Docker image and ghcr release workflow"`
