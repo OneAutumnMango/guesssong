@@ -89,7 +89,7 @@ Streaks: players with 2 or more correct guesses in a row get a 🔥 next to thei
 
 ## Releasing
 
-Pushes to `main` and pull requests run the tests. Pushing an `X.Y.Z` git tag runs the tests first and publishes the image to ghcr.io (for amd64 and arm64) only if they pass. Only integer `X.Y.Z` tags release (for example `0.1.0`, `10.0.14`), with no `v` prefix.
+Pushes to `main` and pull requests run the tests. Pushing an `X.Y.Z` git tag runs the tests first and publishes the image to ghcr.io (for amd64 and arm64) only if they pass. Only integer `X.Y.Z` tags release (for example `0.1.0`, `10.0.14`), with no `v` prefix. The tagged commit must also be on `main`: a tag on any other branch fails the release before anything is built or pushed.
 
 ```sh
 git tag 0.1.0 && git push origin 0.1.0
