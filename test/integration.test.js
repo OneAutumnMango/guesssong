@@ -38,6 +38,13 @@ async function boot(durationMs = 300, extra = {}) {
     const loc = res.headers.get('location');
     return { res, state, key: loc && loc.split('key=')[1] };
   };
+  const loginState = async (room) => {
+    const r = await fetch(`${base}/login?room=${room}`, { redirect: 'manual' });
+    assert.equal(r.status, 302);
+    return new URL(r.headers.get('location')).searchParams.get('state');
+  };
+  const callback = (code, state) => fetch(`${base}/callback?code=${code}&state=${state}`, { redirect: 'manual' });
+  const snap = (code) => { const g = server.rooms.get(code).game; return JSON.stringify([g.phase, g.settings, g.round]); };
   const connect = async (key) => {
     const ws = new WebSocket(`ws://127.0.0.1:${server.address().port}/ws`);
     sockets.push(ws);
@@ -62,7 +69,7 @@ async function boot(durationMs = 300, extra = {}) {
     return c;
   };
   const close = () => new Promise((r) => { sockets.forEach((s) => s.terminate()); server.close(r); });
-  return { server, base, login, connect, close };
+  return { server, base, login, loginState, callback, snap, connect, close };
 }
 
 test('full game flow, permissions, reconnect, cleanup', async () => {
@@ -82,9 +89,11 @@ test('full game flow, permissions, reconnect, cleanup', async () => {
     assert.equal((await jc.phase('lobby')).view.code, code);
 
     // non-host is rejected in lobby (settings/start)
+    const lobbySnap = t.snap(code);
     for (const type of ['start', 'settings']) {
-      jc.send({ type, settings: {} });
+      jc.send({ type, settings: { total: 2 } });
       assert.match((await jc.err()).message, /host/i);
+      assert.equal(t.snap(code), lobbySnap, type + ' changed state');
     }
     jc.send('not json');
     await jc.err();
@@ -106,8 +115,10 @@ test('full game flow, permissions, reconnect, cleanup', async () => {
     await hc.phase('between');
     await jc.phase('between');
 
+    const betweenSnap = t.snap(code);
     jc.send({ type: 'play' });
     assert.match((await jc.err()).message, /host/i);
+    assert.equal(t.snap(code), betweenSnap, 'play changed state');
 
     // round 1: everyone guesses -> reveal well before the timer
     hc.send({ type: 'play' });
@@ -119,8 +130,10 @@ test('full game flow, permissions, reconnect, cleanup', async () => {
     jc.send({ type: 'guess', playerId: 'H' });
     await hc.phase('reveal');
     assert.ok(Date.now() - t0 < 250);
+    const revealSnap = t.snap(code);
     jc.send({ type: 'next' });
     assert.match((await jc.until((m) => m.type === 'error' && /host/i.test(m.message))).message, /host/i);
+    assert.equal(t.snap(code), revealSnap, 'next changed state');
     hc.send({ type: 'next' });
     await hc.phase('between');
 
@@ -223,13 +236,40 @@ test('key rotation after start stores no token', async () => {
     const h = await t.login('new', 'H');
     const hc = await t.connect(h.key);
     const code = (await hc.until((m) => m.type === 'state')).view.code;
-    const j = await t.login(code, 'J');
-    await t.connect(j.key);
+    await t.connect((await t.login(code, 'J')).key);
+    const state = await t.loginState(code); // taken while still in the lobby
     hc.send({ type: 'start' });
     await hc.phase('review');
-    await t.login(code, 'J'); // J logs in again after start
-    for (const p of t.server.rooms.get(code).players.values()) assert.equal(p.token, null);
+    const r = await t.callback('J', state); // reaches the rotation branch
+    assert.equal(r.status, 302);
+    const players = [...t.server.rooms.get(code).players.values()];
+    assert.equal(players.length, 2);
+    for (const p of players) assert.equal(p.token, null);
   } finally {
+    await t.close();
+  }
+});
+
+test('key rotation during start stores no token', async () => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const sp = { ...spotify, fetchPool: async (token, src) => { if (token === 'tok-H') await gate; return spotify.fetchPool(token, src); } };
+  const t = await boot(300, { spotify: sp });
+  try {
+    const h = await t.login('new', 'H');
+    const hc = await t.connect(h.key);
+    const code = (await hc.until((m) => m.type === 'state')).view.code;
+    await t.connect((await t.login(code, 'J')).key);
+    const state = await t.loginState(code);
+    hc.send({ type: 'start' });
+    const room = t.server.rooms.get(code);
+    while (!room.starting) await new Promise((r) => setTimeout(r, 5));
+    assert.equal((await t.callback('J', state)).status, 302); // rotation while start awaits pools
+    release();
+    await hc.phase('review');
+    for (const p of room.players.values()) assert.equal(p.token, null);
+  } finally {
+    release();
     await t.close();
   }
 });
