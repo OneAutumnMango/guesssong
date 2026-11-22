@@ -1,0 +1,45 @@
+:root {
+  --bg: #ffffff; --fg: #15181c; --muted: #5b6470; --card: #f2f4f7;
+  --accent: #1a7f3c; --accent-fg: #ffffff; --danger: #b42318; --border: #c9d0d9;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #101317; --fg: #eef1f4; --muted: #a0a9b5; --card: #1b2027;
+    --accent: #3ddc84; --accent-fg: #06210f; --danger: #ff8a80; --border: #3a424d;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 18px/1.4 system-ui, sans-serif; overflow-x: hidden; }
+main { max-width: 480px; margin: 0 auto; padding: 16px; }
+h1 { font-size: 1.6rem; margin: 0 0 16px; }
+h2 { font-size: 1.2rem; margin: 0 0 8px; }
+section { background: var(--card); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+p { margin: 0 0 12px; overflow-wrap: anywhere; }
+.muted { color: var(--muted); }
+button, .btn, input, select {
+  font: inherit; min-height: 48px; border-radius: 10px; border: 1px solid var(--border);
+  padding: 8px 14px; background: var(--bg); color: var(--fg); max-width: 100%;
+}
+button, .btn {
+  display: block; width: 100%; margin: 8px 0; background: var(--accent); color: var(--accent-fg);
+  border-color: transparent; font-weight: 600; text-align: center; text-decoration: none; cursor: pointer;
+  overflow-wrap: anywhere;
+}
+button.secondary { background: var(--bg); color: var(--fg); border-color: var(--border); }
+button:disabled { opacity: .55; cursor: default; }
+input[type=text], input[type=number], input:not([type]), select { width: 100%; margin: 4px 0 12px; }
+input[type=checkbox] { min-height: 0; width: 24px; height: 24px; vertical-align: middle; margin-right: 8px; }
+label { display: block; }
+:focus-visible { outline: 3px solid var(--fg); outline-offset: 2px; }
+ul { list-style: none; padding: 0; margin: 0; }
+li { padding: 8px 0; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; gap: 8px; overflow-wrap: anywhere; }
+li:last-child { border-bottom: 0; }
+li .grow { flex: 1; min-width: 0; }
+.track { flex-direction: column; }
+.big { font-size: 2.4rem; font-weight: 700; text-align: center; margin: 8px 0; }
+#banner, #error { padding: 10px 14px; border-radius: 10px; margin-bottom: 12px; font-weight: 600; }
+#banner { background: var(--card); border: 1px solid var(--border); }
+#error { border: 2px solid var(--danger); color: var(--danger); }
+#embed-wrap { margin-top: 16px; }
+#embed iframe { width: 100%; border: 0; }
