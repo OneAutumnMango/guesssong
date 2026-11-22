@@ -37,16 +37,27 @@
   let ws = null, retry = 0, view = null, closing = false;
   function send(msg) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg)); }
   function showError(msg) { const e = $('error'); e.textContent = msg || ''; e.hidden = !msg; }
+  function ended(msg) {
+    clearInterval(tick);
+    $('error').hidden = true;
+    app.replaceChildren(el('p', { text: msg }), el('p', {}, el('a', { href: '/', text: 'Home page' })));
+    $('embed-wrap').hidden = true;
+  }
+  window.addEventListener('pagehide', () => { closing = true; });
   function connect() {
-    ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/');
+    ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
     ws.onopen = () => { retry = 0; $('banner').hidden = true; send({ type: 'hello', key }); };
     ws.onmessage = (ev) => {
       let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
-      if (m.type === 'error') showError(String(m.message));
+      if (m.type === 'error') {
+        if (!view) { closing = true; ws.close(); ended(String(m.message)); } // hello rejected: do not retry
+        else showError(String(m.message));
+      }
       else if (m.type === 'state') { showError(''); view = m.view; render(); }
     };
-    ws.onclose = () => {
+    ws.onclose = (ev) => {
       if (closing) return;
+      if (ev.code === 1000) { closing = true; if (!view || view.phase !== 'finished') ended('This session ended (opened elsewhere or the room closed). Rejoin from the home page.'); $('banner').hidden = true; return; }
       $('banner').textContent = 'Reconnecting…';
       $('banner').hidden = false;
       setTimeout(connect, Math.min(1000 * 2 ** retry, 5000));
@@ -59,8 +70,12 @@
   function loadEmbedScript() {
     window.onSpotifyIframeApiReady = (IFrameAPI) => {
       apiReady = true;
+      const created = pendingUri || 'spotify:track:0000000000000000000000';
       IFrameAPI.createController($('embed').appendChild(document.createElement('div')),
-        { uri: pendingUri || 'spotify:track:0000000000000000000000' }, (c) => { controller = c; loadedUri = pendingUri; });
+        { uri: created }, (c) => {
+          controller = c; loadedUri = created;
+          if (pendingUri && pendingUri !== created) { c.loadUri(pendingUri); loadedUri = pendingUri; }
+        });
     };
     const s = document.createElement('script');
     s.src = 'https://open.spotify.com/embed/iframe-api/v1';
@@ -74,6 +89,7 @@
     const show = isHost && ['between', 'playing', 'reveal'].includes(view.phase);
     $('embed-wrap').hidden = !show;
     if (!isHost) return;
+    if (view.phase === 'finished' && controller && controller.pause) controller.pause();
     if (!embedStarted) { embedStarted = true; pendingUri = view.nextUri || null; loadEmbedScript(); }
     const note = $('embed-note');
     note.hidden = !(show && apiFailed);
