@@ -2,7 +2,7 @@ import qrcode from 'qrcode-generator';
 
 export const joinUrl = (publicUrl, code) => publicUrl.replace(/\/$/, '') + '/login?room=' + code;
 
-const QUIET = 4; // modules of white border, required for reliable scanning
+const QUIET = 3; // modules of white border (spec says 4; 2 failed one OpenCV decode on a dark card at 150 px, see task report)
 
 export function qrSvg(text) {
   const qr = qrcode(0, 'M'); // type 0 = smallest version that fits
