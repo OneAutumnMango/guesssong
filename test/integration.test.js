@@ -1,0 +1,192 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import WebSocket from 'ws';
+import { createServer } from '../src/server.js';
+import { SpotifyError } from '../src/spotify.js';
+
+const spotify = {
+  exchangeCode: async ({ code }) => {
+    if (code === 'bad') throw new SpotifyError(403, 'nope');
+    return 'tok-' + code;
+  },
+  fetchProfile: async (token) => ({ id: token.slice(4), name: token.slice(4) }),
+  fetchPool: async (token) =>
+    token === 'tok-empty' ? [] : Array.from({ length: 20 }, (_, i) => ({ id: `${token}-${i}`, uri: `spotify:track:${token}-${i}`, title: 't' + i, artist: 'a' })),
+};
+
+const publicDir = mkdtempSync(join(tmpdir(), 'pub-'));
+writeFileSync(join(publicDir, 'play.html'), '<p>hi</p>');
+
+async function boot(durationMs = 1000) {
+  const server = createServer({ clientId: 'cid', publicUrl: 'http://x.test', spotify, durationMs, publicDir });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const sockets = [];
+  const login = async (room, code) => {
+    const r = await fetch(`${base}/login?room=${room}`, { redirect: 'manual' });
+    if (r.status !== 302) return { res: r };
+    const state = new URL(r.headers.get('location')).searchParams.get('state');
+    const res = await fetch(`${base}/callback?code=${code}&state=${state}`, { redirect: 'manual' });
+    const loc = res.headers.get('location');
+    return { res, state, key: loc && loc.split('key=')[1] };
+  };
+  const connect = async (key) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${server.address().port}/ws`);
+    sockets.push(ws);
+    const c = { ws, msgs: [], waiters: [] };
+    ws.on('message', (d) => { c.msgs.push(JSON.parse(d)); c.waiters.forEach((w) => w()); });
+    await new Promise((r) => ws.on('open', r));
+    c.send = (m) => ws.send(typeof m === 'string' ? m : JSON.stringify(m));
+    c.until = (pred, ms = 3000) => new Promise((res, rej) => {
+      const t = setTimeout(() => rej(new Error('timeout waiting for message')), ms);
+      const check = () => {
+        while (c.msgs.length) {
+          const m = c.msgs.shift();
+          if (pred(m)) { clearTimeout(t); c.waiters = c.waiters.filter((w) => w !== check); return res(m); }
+        }
+      };
+      c.waiters.push(check);
+      check();
+    });
+    c.phase = (p) => c.until((m) => m.type === 'state' && m.view.phase === p);
+    c.err = () => c.until((m) => m.type === 'error');
+    if (key) c.send({ type: 'hello', key });
+    return c;
+  };
+  const close = () => new Promise((r) => { sockets.forEach((s) => s.terminate()); server.close(r); });
+  return { server, base, login, connect, close };
+}
+
+test('full game flow, permissions, reconnect, cleanup', async () => {
+  const t = await boot(1000);
+  try {
+    const h = await t.login('new', 'H');
+    assert.equal(h.res.status, 302);
+    assert.match(h.res.headers.get('location'), /^\/play\.html#key=[0-9a-f]{32}$/);
+    const hc = await t.connect(h.key);
+    const first = await hc.until((m) => m.type === 'state');
+    assert.equal(first.view.phase, 'lobby');
+    const code = first.view.code;
+    assert.match(code, /^[A-Z]{4}$/);
+
+    const j = await t.login(code, 'J');
+    const jc = await t.connect(j.key);
+    assert.equal((await jc.phase('lobby')).view.code, code);
+
+    // non-host is rejected; garbage never crashes
+    for (const type of ['start', 'settings', 'next', 'play']) {
+      jc.send({ type, settings: {} });
+      assert.equal((await jc.err()).type, 'error');
+    }
+    jc.send('not json');
+    await jc.err();
+    jc.send({ type: 'bogus' });
+    await jc.err();
+    hc.send({ type: 'settings', settings: 'x' });
+    await hc.err();
+    hc.send({ type: 'settings', settings: { total: -1 } });
+    assert.match((await hc.err()).message, /Invalid setting/);
+
+    hc.send({ type: 'settings', settings: { total: 4, buffer: 1 } });
+    hc.send({ type: 'start' });
+    const hr = await hc.phase('review');
+    const jr = await jc.phase('review');
+    hc.send({ type: 'remove', trackId: hr.view.myTracks[0].id });
+    jc.send({ type: 'remove', trackId: jr.view.myTracks[0].id });
+    hc.send({ type: 'ready' });
+    jc.send({ type: 'ready' });
+    await hc.phase('between');
+    await jc.phase('between');
+
+    // round 1: everyone guesses -> reveal well before the timer
+    hc.send({ type: 'play' });
+    await hc.phase('playing');
+    jc.send({ type: 'guess', playerId: 'nobody' });
+    assert.match((await jc.err()).message, /player/i);
+    const t0 = Date.now();
+    hc.send({ type: 'guess', playerId: 'J' });
+    jc.send({ type: 'guess', playerId: 'H' });
+    await hc.phase('reveal');
+    assert.ok(Date.now() - t0 < 500);
+    hc.send({ type: 'next' });
+    await hc.phase('between');
+
+    // reconnect: new socket with same key gets state
+    const hc2 = await t.connect(h.key);
+    assert.equal((await hc2.until((m) => m.type === 'state')).view.phase, 'between');
+
+    // round 2: nobody guesses -> reveal after the timer
+    const t1 = Date.now();
+    hc2.send({ type: 'play' });
+    await hc2.phase('reveal');
+    assert.ok(Date.now() - t1 >= 900);
+    hc2.send({ type: 'next' });
+    await hc2.phase('finished');
+    await jc.phase('finished');
+
+    const gone = await t.login(code, 'J');
+    assert.notEqual(gone.res.status, 302);
+  } finally {
+    await t.close();
+  }
+});
+
+test('failed start (empty pool) names the player and stays in lobby', async () => {
+  const t = await boot();
+  try {
+    const h = await t.login('new', 'H');
+    const hc = await t.connect(h.key);
+    const code = (await hc.until((m) => m.type === 'state')).view.code;
+    const e = await t.login(code, 'empty');
+    await t.connect(e.key);
+    hc.send({ type: 'start' });
+    assert.match((await hc.err()).message, /empty/);
+    const hc2 = await t.connect(h.key);
+    assert.equal((await hc2.until((m) => m.type === 'state')).view.phase, 'lobby');
+  } finally {
+    await t.close();
+  }
+});
+
+test('oauth: 403 page, bad/reused state', async () => {
+  const t = await boot();
+  try {
+    const r = await t.login('new', 'bad');
+    assert.equal(r.res.status, 403);
+    assert.match(await r.res.text(), /allowlist/);
+    const ok = await t.login('new', 'H');
+    const again = await fetch(`${t.base}/callback?code=H&state=${ok.state}`, { redirect: 'manual' });
+    assert.equal(again.status, 400);
+    const unknown = await fetch(`${t.base}/callback?code=H&state=zzz`, { redirect: 'manual' });
+    assert.equal(unknown.status, 400);
+  } finally {
+    await t.close();
+  }
+});
+
+test('static serving stays inside publicDir', async () => {
+  const t = await boot();
+  const port = t.server.address().port;
+  const get = (path) => new Promise((res, rej) => http.get({ port, host: '127.0.0.1', path }, (r) => {
+    let b = '';
+    r.on('data', (d) => (b += d));
+    r.on('end', () => res({ status: r.statusCode, headers: r.headers, body: b }));
+  }).on('error', rej));
+  try {
+    const ok = await get('/play.html');
+    assert.equal(ok.status, 200);
+    assert.equal(ok.headers['x-content-type-options'], 'nosniff');
+    assert.match(ok.headers['content-type'], /text\/html/);
+    for (const p of ['/../package.json', '/%2e%2e/package.json', '/..%2fpackage.json', '/%00', '//etc/passwd']) {
+      const r = await get(p);
+      assert.notEqual(r.status, 200, p);
+      assert.ok(!r.body.includes('guesssong'), p);
+    }
+  } finally {
+    await t.close();
+  }
+});
