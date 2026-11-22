@@ -18,6 +18,7 @@ Faster correct guesses score more. Works in PC and mobile browsers, one device p
 | `SPOTIFY_CLIENT_ID` | yes | | Client ID of your Spotify app |
 | `PUBLIC_URL` | yes | | Public https URL, e.g. `https://guesssong.mang0.uk` |
 | `PORT` | no | `3000` | Port to listen on |
+| `DEV_MODE` | no | unset | `1` enables test players. Local only (127.0.0.1 / localhost); never set it in Docker |
 
 The server exits with an error if the first two are missing.
 
@@ -43,6 +44,7 @@ npm run dev      # or: bash scripts/dev.sh
 - Open http://127.0.0.1:3000 (not `localhost`).
 - Add `http://127.0.0.1:3000/callback` as a redirect URI in the Spotify app. Spotify allows plain http for the `127.0.0.1` loopback literal, but not for `localhost`.
 - `scripts/dev.sh` loads your env file if present, sets `PUBLIC_URL` to `http://127.0.0.1:${PORT:-3000}` and `DEV_MODE=1`.
+- The env file is read with bash syntax (`KEY=value`, quotes if a value has spaces; LF or CRLF line endings are fine). `PUBLIC_URL` there is ignored in dev mode.
 - In the lobby the host can add and remove test players (up to 8 players in total). Test players take their songs from your own library and guess randomly 2-15 seconds after Play.
 - The server refuses to start with `DEV_MODE=1` on any public URL, and the Docker image never sets it.
 - Testing the audio embed on a phone needs a tunnel and is out of scope for dev mode.

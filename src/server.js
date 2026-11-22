@@ -58,7 +58,8 @@ export function createServer({ clientId, publicUrl, spotify = realSpotify, durat
         try {
           const { game } = room;
           if (game.phase !== 'playing') return;
-          const others = [...game.players.keys()].filter((x) => x !== id);
+          const others = game.participants().filter((x) => x !== id);
+          if (!others.length) return;
           if (!game.guess(id, others[Math.floor(Math.random() * others.length)])) return;
           if (game.allGuessed()) finishRound(code, room); else broadcast(code, room);
         } catch { /* illegal or late guess: ignore */ }
@@ -82,23 +83,31 @@ export function createServer({ clientId, publicUrl, spotify = realSpotify, durat
     try {
       const { game } = room;
       const ids = game.participants().filter((id) => !game.players.get(id).bot);
+      const hostExtra = room.bots.length > 0 && !ids.includes(game.hostId); // non-playing host still lends songs to bots
+      const fetchIds = hostExtra ? [...ids, game.hostId] : ids;
       const withTimeout = (p) => {
         let t;
         const timer = new Promise((_, rej) => { t = setTimeout(() => rej(new Error('timeout')), fetchTimeoutMs); });
         return Promise.race([p, timer]).finally(() => clearTimeout(t));
       };
-      const results = await Promise.allSettled(ids.map((id) => {
+      const results = await Promise.allSettled(fetchIds.map((id) => {
         const e = [...room.players.values()].find((x) => x.id === id);
         return withTimeout(Promise.resolve().then(() => spotify.fetchPool(e?.token, game.settings.source)));
       }));
       const pools = {};
-      for (const [i, id] of ids.entries()) {
+      let hostPool;
+      for (const [i, id] of fetchIds.entries()) {
         if (results[i].status === 'rejected') throw new Error(`Could not load songs for ${game.players.get(id).name}`);
-        pools[id] = results[i].value;
+        if (id === game.hostId && hostExtra) hostPool = results[i].value; else pools[id] = results[i].value;
       }
       if (room.bots.length) { // test players borrow the host's songs (or the first real player's)
-        const src = pools[game.hostId] ?? pools[ids[0]];
-        if (!src) throw new Error('No songs available for test players');
+        const src = hostPool ?? pools[game.hostId] ?? pools[ids[0]];
+        if (!src?.length) throw new Error('No songs available for test players');
+        const n = ids.length + room.bots.length;
+        const sharers = room.bots.length + (hostPool ? 0 : 1); // players drawing from the one shared pool
+        if (Math.floor(game.settings.total / n) * sharers > src.length) {
+          throw new Error(`Not enough songs for ${room.bots.length} test players; add fewer test players`);
+        }
         for (const b of room.bots) pools[b] = [...src];
       }
       game.start(pools);
@@ -155,12 +164,13 @@ export function createServer({ clientId, publicUrl, spotify = realSpotify, durat
           if (room.starting) throw new Error('Game is starting');
           if (m.type === 'addBot') {
             const n = room.botN + 1;
-            game.addPlayer(`bot-${n}`, `Test ${n}`, false, true);
+            game.addPlayer(`bot:${n}`, `Test ${n}`, false, true); // ':' cannot appear in a Spotify id
             room.botN = n;
-            room.bots.push(`bot-${n}`);
+            room.bots.push(`bot:${n}`);
           } else {
             if (!room.bots.length) throw new Error('No test players to remove');
-            game.removePlayer(room.bots.pop());
+            game.removePlayer(room.bots.at(-1)); // throws outside the lobby, before the list is touched
+            room.bots.pop();
           }
           break;
         }
@@ -355,6 +365,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     }
     console.error('DEV MODE ON: test players enabled, never run this in production');
   }
-  const server = createServer({ clientId: SPOTIFY_CLIENT_ID, publicUrl: PUBLIC_URL.replace(/\/$/, ''), devMode }).listen(Number(PORT));
+  const server = createServer({ clientId: SPOTIFY_CLIENT_ID, publicUrl: PUBLIC_URL.replace(/\/$/, ''), devMode }).listen(Number(PORT), devMode ? '127.0.0.1' : undefined);
   for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 2000).unref(); }); // open websockets would delay close
 }

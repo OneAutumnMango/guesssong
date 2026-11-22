@@ -529,7 +529,7 @@ test('dev mode: solo host plays a full game with test players', async () => {
     assert.ok(s3.view.players.every((p) => p.connected));
     hc.send({ type: 'removeBot' });
     await hc.until((m) => m.type === 'state' && m.view.players.length === 2);
-    assert.ok(!room.game.players.has('bot-2'));
+    assert.ok(!room.game.players.has('bot:2'));
     hc.send({ type: 'addBot' });
     for (let i = 0; i < 5; i++) hc.send({ type: 'addBot' }); // reaches 8, the 9th is refused
     await hc.until((m) => m.type === 'state' && m.view.players.length === 8);
@@ -549,7 +549,7 @@ test('dev mode: solo host plays a full game with test players', async () => {
     for (;;) {
       const t0 = Date.now();
       hc.send({ type: 'play' });
-      hc.send({ type: 'guess', playerId: 'bot-1' }); // rejected when the host owns the song
+      hc.send({ type: 'guess', playerId: 'bot:1' }); // rejected when the host owns the song
       const rev = await hc.phase('reveal');
       assert.ok(Date.now() - t0 < 2000, 'round should end early once everyone guessed');
       assert.ok(rev.view.reveal.deltas);
@@ -585,4 +585,99 @@ test('DEV_MODE entry point refuses public URLs and accepts loopback', async () =
   good.kill();
   assert.equal(exited, false, gerr);
   assert.match(gerr, /DEV MODE ON/);
+});
+
+const devOpts = { devMode: true, botDelayMs: [10, 40] };
+async function devHost(t, hostPlays = true) {
+  const h = await t.login('new', 'H');
+  const hc = await t.connect(h.key);
+  const code = (await hc.until((m) => m.type === 'state')).view.code;
+  if (!hostPlays) { hc.send({ type: 'settings', settings: { hostPlays: false } }); }
+  return { h, hc, code, room: t.server.rooms.get(code) };
+}
+const players = (hc, n) => hc.until((m) => m.type === 'state' && m.view.players.length === n);
+
+test('dev: removeBot after start is refused and keeps state consistent', async () => {
+  const t = await boot(5000, { opts: devOpts });
+  try {
+    const { hc, room } = await devHost(t);
+    hc.send({ type: 'addBot' });
+    await players(hc, 2);
+    hc.send({ type: 'settings', settings: { total: 4, buffer: 0 } });
+    hc.send({ type: 'start' });
+    await hc.phase('review');
+    hc.send({ type: 'ready' });
+    await hc.phase('between');
+    hc.send({ type: 'removeBot' });
+    assert.ok((await hc.err()).message);
+    assert.deepEqual(room.bots, ['bot:1']);
+    assert.ok(room.game.players.has('bot:1'));
+    const t0 = Date.now();
+    hc.send({ type: 'play' });
+    hc.send({ type: 'guess', playerId: 'bot:1' });
+    await hc.until((m) => m.type === 'state' && m.view.phase === 'reveal', 2500);
+    assert.ok(Date.now() - t0 < 2000);
+  } finally {
+    await t.close();
+  }
+});
+
+test('dev: a bot cannot start the game while the host is disconnected in review', async () => {
+  const t = await boot(300, { opts: devOpts });
+  try {
+    const { h, hc, room } = await devHost(t);
+    hc.send({ type: 'addBot' });
+    await players(hc, 2);
+    hc.send({ type: 'start' });
+    await hc.phase('review');
+    hc.ws.terminate();
+    for (let i = 0; i < 100 && room.game.players.get('H').connected; i++) await new Promise((r) => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(room.game.phase, 'review');
+    const hc2 = await t.connect(h.key);
+    await hc2.phase('review');
+    hc2.send({ type: 'ready' });
+    await hc2.phase('between');
+  } finally {
+    await t.close();
+  }
+});
+
+test('dev: host who does not play can play with test players to the end', async () => {
+  const t = await boot(5000, { opts: devOpts });
+  try {
+    const { hc, room } = await devHost(t, false);
+    hc.send({ type: 'addBot' });
+    hc.send({ type: 'addBot' });
+    await players(hc, 3);
+    hc.send({ type: 'settings', settings: { total: 6, buffer: 0 } });
+    hc.send({ type: 'start' });
+    await hc.phase('between');
+    for (;;) {
+      hc.send({ type: 'play' });
+      await hc.until((m) => m.type === 'state' && m.view.phase === 'reveal', 2500);
+      hc.send({ type: 'next' });
+      const nx = await hc.until((m) => m.type === 'state' && ['between', 'finished'].includes(m.view.phase));
+      if (nx.view.phase === 'finished') break;
+    }
+    assert.equal(t.server.rooms.size, 0);
+    assert.equal(room.botTimers.size, 0);
+  } finally {
+    await t.close();
+  }
+});
+
+test('dev: too few songs for the test players is a clear error', async () => {
+  const sp = { ...spotify, fetchPool: async (token) => (await spotify.fetchPool(token)).slice(0, 3) };
+  const t = await boot(300, { spotify: sp, opts: devOpts });
+  try {
+    const { hc, room } = await devHost(t);
+    for (let i = 0; i < 3; i++) hc.send({ type: 'addBot' });
+    await players(hc, 4);
+    hc.send({ type: 'start' });
+    assert.match((await hc.err()).message, /Not enough songs for 3 test players/);
+    assert.equal(room.game.phase, 'lobby');
+  } finally {
+    await t.close();
+  }
 });

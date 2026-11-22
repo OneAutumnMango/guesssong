@@ -24,6 +24,7 @@ export class Game {
 
   addPlayer(id, name, isHost = false, bot = false) {
     if (this.phase !== 'lobby') throw new Error('Game already started');
+    if (this.players.has(id)) throw new Error('Player already in room');
     if (this.players.size >= MAX_PLAYERS) throw new Error('Room is full');
     this.players.set(id, { id, name, connected: true, score: 0, bot });
     if (isHost) this.hostId = id;
@@ -107,7 +108,8 @@ export class Game {
     if (this.phase !== 'review') return false;
     const ids = this.participants();
     if (!ids.every((id) => this.ready.has(id) || !this.players.get(id).connected)) return false;
-    if (!ids.some((id) => this.ready.has(id) && this.players.get(id).connected)) return false;
+    const humans = ids.filter((id) => !this.players.get(id).bot); // test players must not start review on their own
+    if (!(humans.length ? humans : ids).some((id) => this.ready.has(id) && this.players.get(id).connected)) return false;
     const q = Object.entries(this.tracks).flatMap(([ownerId, ts]) => ts.map((track) => ({ ownerId, track })));
     if (!q.length) throw new Error('No songs left');
     for (let i = q.length - 1; i > 0; i--) {

@@ -197,3 +197,8 @@ test('total too small for participants throws clear error', () => {
   g.configure({ total: 3 });
   assert.throws(() => g.start({ a: pool('a'), b: pool('b'), c: pool('c'), d: pool('d') }), /Need at least 1 song per player; raise Total songs/);
 });
+
+test('addPlayer rejects a duplicate id', () => {
+  const g = mk();
+  assert.throws(() => g.addPlayer('a', 'Again'), /already/i);
+});
