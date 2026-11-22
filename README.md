@@ -65,11 +65,13 @@ Songs per player = min(floor(total / players), smallest player pool).
 
 ## Releasing
 
-Push a git tag like `v0.1.0`. GitHub Actions builds the image and publishes it to ghcr.io.
+Pushes to `main` and pull requests run the tests. Pushing a `v*` git tag runs the tests first and publishes the image to ghcr.io only if they pass.
 
 ```sh
 git tag v0.1.0 && git push origin v0.1.0
 ```
+
+To also block merging on failing tests, enable branch protection on `main` and require the `Test / test` status check. This is a GitHub repo setting and cannot be done from the repo files.
 
 ## Tests
 
