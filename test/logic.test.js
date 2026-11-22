@@ -20,7 +20,7 @@ test('perPlayerCount', () => {
 const t = (id) => ({ id, uri: 'spotify:track:' + id, title: id, artist: 'a' });
 
 test('pickTracks: own pool, no duplicates across players', () => {
-  const pools = { a: ['1', '2', '3', '4'].map(t), b: ['3', '4', '5', '6'].map(t) };
+  const pools = { a: ['1', '2', '3', '4'].map(t), b: ['4', '5', '6', '7'].map(t) };
   const r = pickTracks(pools, 3);
   assert.equal(r.a.length, 3);
   assert.equal(r.b.length, 3);
