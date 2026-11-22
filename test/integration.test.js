@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import WebSocket from 'ws';
 import { createServer } from '../src/server.js';
 import { SpotifyError } from '../src/spotify.js';
+import { joinUrl, qrSvg } from '../src/qr.js';
 
 const spotify = {
   exchangeCode: async ({ code }) => {
@@ -680,4 +681,51 @@ test('dev: too few songs for the test players is a clear error', async () => {
   } finally {
     await t.close();
   }
+});
+
+test('join url and qr.svg come from the configured publicUrl, not the Host header', async () => {
+  const pub = 'https://game.example.test';
+  const t = await boot(300, { opts: { publicUrl: pub + '/' } });
+  try {
+    const h = await t.login('new', 'H');
+    const hc = await t.connect(h.key);
+    const view = (await hc.until((m) => m.type === 'state')).view;
+    const code = view.code;
+    assert.equal(view.joinUrl, `${pub}/login?room=${code}`);
+    const getRaw = (path, host) => new Promise((res, rej) => http.get({ port: t.server.address().port, host: '127.0.0.1', path, headers: { Host: host } }, (r) => {
+      let b = '';
+      r.on('data', (d) => (b += d));
+      r.on('end', () => res({ status: r.statusCode, headers: r.headers, body: b }));
+    }).on('error', rej));
+    const a = await getRaw(`/qr.svg?room=${code}`, '127.0.0.1');
+    const b = await getRaw(`/qr.svg?room=${code}`, 'evil.example');
+    assert.equal(a.status, 200);
+    assert.match(a.headers['content-type'], /^image\/svg\+xml/);
+    assert.equal(a.headers['cache-control'], 'no-store');
+    assert.equal(a.headers['x-content-type-options'], 'nosniff');
+    assert.equal(a.headers['set-cookie'], undefined);
+    assert.equal(a.body, qrSvg(joinUrl(pub, code)));
+    assert.equal(b.body, a.body);
+    for (const q of ['room=ZZZZ', `room=${code.toLowerCase()}`, 'room=ABC', 'room=ABCDE', '', `room=${code}%26x%3D1`, `room=${code}&room=${code}x`]) {
+      const r = await getRaw('/qr.svg?' + q, '127.0.0.1');
+      assert.equal(r.status, 404, q);
+    }
+  } finally {
+    await t.close();
+  }
+});
+
+test('qr changes when publicUrl changes', async () => {
+  const svgFor = async (pub) => {
+    const t = await boot(300, { opts: { publicUrl: pub } });
+    try {
+      const h = await t.login('new', 'H');
+      const code = [...t.server.rooms.keys()][0];
+      assert.ok(h.key);
+      return await (await fetch(`${t.base}/qr.svg?room=${code}`)).text();
+    } finally {
+      await t.close();
+    }
+  };
+  assert.notEqual(await svgFor('https://a.example.test'), await svgFor('https://b.example.test'));
 });

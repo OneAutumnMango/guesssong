@@ -16,7 +16,7 @@ Faster correct guesses score more. Works in PC and mobile browsers, one device p
 | Variable | Required | Default | Meaning |
 |---|---|---|---|
 | `SPOTIFY_CLIENT_ID` | yes | | Client ID of your Spotify app |
-| `PUBLIC_URL` | yes | | Public https URL, e.g. `https://guesssong.mang0.uk` |
+| `PUBLIC_URL` | yes | | Public https URL, e.g. `https://guesssong.mang0.uk`. Also what the QR code and join link use, so it must be an address the players' phones can reach |
 | `PORT` | no | `3000` | Port to listen on |
 | `DEV_MODE` | no | unset | `1` enables test players. Local only (127.0.0.1 / localhost); never set it in Docker |
 
@@ -47,6 +47,7 @@ npm run dev      # or: bash scripts/dev.sh
 - The env file is read with bash syntax (`KEY=value`, quotes if a value has spaces; LF or CRLF line endings are fine). `PUBLIC_URL` there is ignored in dev mode.
 - In the lobby the host can add and remove test players (up to 8 players in total). Test players take their songs from your own library and guess randomly 2-15 seconds after Play.
 - The server refuses to start with `DEV_MODE=1` on any public URL, and the Docker image never sets it.
+- In dev mode the URL is 127.0.0.1, so a phone cannot use the QR code; test it from a second tab or desktop browser.
 - Testing the audio embed on a phone needs a tunnel and is out of scope for dev mode.
 
 ## Run with Docker

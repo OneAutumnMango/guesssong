@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { Game } from './game.js';
 import * as realSpotify from './spotify.js';
+import { joinUrl, qrSvg } from './qr.js';
 import { SpotifyError, makePkce, authUrl } from './spotify.js';
 
 const MAX_ROOMS = 20;
@@ -19,9 +20,10 @@ const defaultPublic = fileURLToPath(new URL('../public', import.meta.url));
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
-export function createServer({ clientId, publicUrl, spotify = realSpotify, durationMs = 20000, publicDir = defaultPublic, fetchTimeoutMs = 15000, pingMs = 30000, devMode = false, botDelayMs = [2000, 15000] }) {
+export function createServer({ clientId, publicUrl: rawPublicUrl, spotify = realSpotify, durationMs = 20000, publicDir = defaultPublic, fetchTimeoutMs = 15000, pingMs = 30000, devMode = false, botDelayMs = [2000, 15000] }) {
   const pending = new Map(); // state -> { verifier, room, createdAt }
   const rooms = new Map(); // code -> { game, players: Map<key,{id,token,socket}>, bots: ids, botTimers: Set, botN, timer, starting, emptySince }
+  const publicUrl = rawPublicUrl.replace(/\/$/, '');
   const redirectUri = publicUrl + '/callback';
   const root = resolve(publicDir);
 
@@ -29,7 +31,7 @@ export function createServer({ clientId, publicUrl, spotify = realSpotify, durat
 
   function broadcast(code, room) {
     for (const p of room.players.values()) {
-      if (p.socket) send(p.socket, { type: 'state', view: { ...room.game.view(p.id), code, ...(devMode && { dev: true }) } });
+      if (p.socket) send(p.socket, { type: 'state', view: { ...room.game.view(p.id), code, joinUrl: joinUrl(publicUrl, code), ...(devMode && { dev: true }) } });
     }
     if (room.game.phase === 'finished') { // final state already sent above
       clearTimeout(room.timer);
@@ -298,6 +300,13 @@ export function createServer({ clientId, publicUrl, spotify = realSpotify, durat
     res.end();
   }
 
+  async function qr(url, res) {
+    const room = url.searchParams.getAll('room');
+    if (room.length !== 1 || !/^[A-Z]{4}$/.test(room[0]) || !rooms.has(room[0])) return page(res, 404, 'Not found');
+    res.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'no-store' });
+    res.end(qrSvg(joinUrl(publicUrl, room[0])));
+  }
+
   async function serveStatic(url, res) {
     let path;
     try { path = decodeURIComponent(url.pathname); } catch { return page(res, 400, 'Bad request'); }
@@ -320,7 +329,7 @@ export function createServer({ clientId, publicUrl, spotify = realSpotify, durat
     let url;
     try { url = new URL(req.url, 'http://localhost'); } catch { return page(res, 400, 'Bad request'); }
     const h = req.method === 'GET' || req.method === 'HEAD'
-      ? url.pathname === '/login' ? login : url.pathname === '/callback' ? callback : serveStatic
+      ? url.pathname === '/login' ? login : url.pathname === '/callback' ? callback : url.pathname === '/qr.svg' ? qr : serveStatic
       : null;
     if (!h) return page(res, 405, 'Method not allowed');
     h(url, res).catch((e) => { console.error('request failed:', e?.message); if (!res.headersSent) page(res, 500, 'Server error'); else res.end(); });
