@@ -10,6 +10,6 @@ test('hidden Spotify embed stays inside the viewport and is not display:none', (
   assert.ok(rule, '.embed-hidden rule exists');
   assert.doesNotMatch(rule, /(left|right|top|bottom)\s*:\s*-/, 'no negative offsets');
   assert.doesNotMatch(rule, /display\s*:\s*none|visibility\s*:\s*hidden/, 'stays rendered');
-  assert.match(rule, /opacity\s*:\s*0?\.\d+/, 'invisible via opacity');
+  assert.match(rule, /opacity\s*:\s*0(\.\d+)?\s*;/, 'invisible via opacity (opacity:0 still loads and plays: tested)');
   assert.match(rule, /pointer-events\s*:\s*none/, 'cannot be clicked');
 });
