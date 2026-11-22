@@ -7,7 +7,7 @@ Faster correct guesses score more. Works in PC and mobile browsers, one device p
 ## Spotify setup
 
 1. Create an app at <https://developer.spotify.com/dashboard>. Choose only **Web API**.
-2. Add the redirect URI exactly: `https://guesssong.mang0.uk/callback` (no trailing slash; it is `<PUBLIC_URL>/callback`).
+2. Add the redirect URI exactly: `https://guesssong.example.com/callback` (no trailing slash; it is `<PUBLIC_URL>/callback`).
 3. The app starts in development mode: only allowlisted accounts can log in, max 25. Add each friend's Spotify account email under **User Management**.
 4. Only the **client ID** is needed (PKCE login). There is no client secret.
 
@@ -16,7 +16,7 @@ Faster correct guesses score more. Works in PC and mobile browsers, one device p
 | Variable | Required | Default | Meaning |
 |---|---|---|---|
 | `SPOTIFY_CLIENT_ID` | yes | | Client ID of your Spotify app |
-| `PUBLIC_URL` | yes | | Public https URL, e.g. `https://guesssong.mang0.uk`. Also what the QR code and join link use, so it must be an address the players' phones can reach |
+| `PUBLIC_URL` | yes | | Public https URL, e.g. `https://guesssong.example.com`. Also what the QR code and join link use, so it must be an address the players' phones can reach |
 | `PORT` | no | `3000` | Port to listen on |
 | `DEV_MODE` | no | unset | `1` enables test players. Local only (127.0.0.1 / localhost); never set it in Docker |
 
@@ -27,7 +27,7 @@ The server exits with an error if the first two are missing.
 ```sh
 npm install
 export SPOTIFY_CLIENT_ID=...
-export PUBLIC_URL=https://guesssong.mang0.uk
+export PUBLIC_URL=https://guesssong.example.com
 npm start
 ```
 
@@ -54,7 +54,7 @@ npm run dev      # or: bash scripts/dev.sh
 
 ```sh
 docker run -p 3000:3000 \
-  -e SPOTIFY_CLIENT_ID=... -e PUBLIC_URL=https://guesssong.mang0.uk \
+  -e SPOTIFY_CLIENT_ID=... -e PUBLIC_URL=https://guesssong.example.com \
   ghcr.io/<owner>/guesssong:latest
 ```
 
@@ -68,8 +68,8 @@ Spotify requires https for the redirect URI. Quick test (the URL is random, so s
 cloudflared tunnel --url http://localhost:3000
 ```
 
-Permanent: create a named tunnel and route `guesssong.mang0.uk` to `http://localhost:3000`
-(`cloudflared tunnel route dns <tunnel> guesssong.mang0.uk`, with `service: http://localhost:3000` in the tunnel config).
+Permanent: create a named tunnel and route `guesssong.example.com` to `http://localhost:3000`
+(`cloudflared tunnel route dns <tunnel> guesssong.example.com`, with `service: http://localhost:3000` in the tunnel config).
 
 ## How to play
 
@@ -89,10 +89,10 @@ Streaks: players with 2 or more correct guesses in a row get a 🔥 next to thei
 
 ## Releasing
 
-Pushes to `main` and pull requests run the tests. Pushing a `v*` git tag runs the tests first and publishes the image to ghcr.io only if they pass.
+Pushes to `main` and pull requests run the tests. Pushing an `X.Y.Z` git tag runs the tests first and publishes the image to ghcr.io (for amd64 and arm64) only if they pass. Only integer `X.Y.Z` tags release (for example `0.1.0`, `10.0.14`), with no `v` prefix.
 
 ```sh
-git tag v0.1.0 && git push origin v0.1.0
+git tag 0.1.0 && git push origin 0.1.0
 ```
 
 To also block merging on failing tests, enable branch protection on `main` and require the `Test / test` status check. This is a GitHub repo setting and cannot be done from the repo files.
