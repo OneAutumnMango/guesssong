@@ -1,23 +1,42 @@
 (function () {
   'use strict';
   const STREAK_MIN = 2;
+  const SEAT_KEY = 'gs.seat', SEAT_TTL = 12 * 3600 * 1000;
   const $ = (id) => document.getElementById(id);
   const app = $('app');
 
-  // --- key handling: hash -> sessionStorage, then scrub the URL
-  let key = null;
-  try {
-    const m = /(?:^#|&)key=([^&]+)/.exec(location.hash);
-    if (m) {
-      sessionStorage.setItem('key', decodeURIComponent(m[1]));
-      history.replaceState(null, '', location.pathname + location.search);
-    }
-    key = sessionStorage.getItem('key');
-  } catch (e) { /* storage blocked */ }
-  if (!key) {
-    const m = /(?:^#|&)key=([^&]+)/.exec(location.hash);
-    if (m) { key = decodeURIComponent(m[1]); history.replaceState(null, '', location.pathname + location.search); }
+  // --- saved seat (localStorage): lets a phone rejoin after a lost connection or closed tab
+  function readSeat() {
+    try {
+      const s = JSON.parse(localStorage.getItem(SEAT_KEY));
+      if (s && typeof s.key === 'string' && Date.now() - s.savedAt < SEAT_TTL) return s;
+      if (s) localStorage.removeItem(SEAT_KEY);
+    } catch (e) { /* storage blocked or bad data */ }
+    return null;
   }
+  function saveSeat(k, code) { try { localStorage.setItem(SEAT_KEY, JSON.stringify({ key: k, code: code || null, savedAt: Date.now() })); } catch (e) { /* ignore */ } }
+  function clearSeat() { try { localStorage.removeItem(SEAT_KEY); } catch (e) { /* ignore */ } }
+
+  // --- key: hash -> sessionStorage -> localStorage seat; the hash is scrubbed after reading
+  let key = null, savedCode = null;
+  const hm = /(?:^#|&)key=([^&]+)/.exec(location.hash);
+  if (hm) {
+    try { key = decodeURIComponent(hm[1]); } catch (e) { key = hm[1]; }
+    try { sessionStorage.setItem('key', key); } catch (e) { /* ignore */ }
+    saveSeat(key, null);
+    history.replaceState(null, '', location.pathname + location.search);
+  } else {
+    try { key = sessionStorage.getItem('key'); } catch (e) { /* ignore */ }
+    const seat = readSeat();
+    if (seat) {
+      savedCode = seat.code;
+      if (!key) { key = seat.key; try { sessionStorage.setItem('key', key); } catch (e) { /* ignore */ } }
+    }
+  }
+  const roomCode = () => {
+    const c = (view && view.code) || savedCode;
+    return typeof c === 'string' && /^[A-Z]{4}$/.test(c) ? c : null;
+  };
 
   // --- DOM helper: text only, never innerHTML
   function el(tag, props, ...kids) {
@@ -35,93 +54,126 @@
   const btn = (text, onclick, cls, focus) => el('button', { type: 'button', text, onclick, class: cls || '', 'data-focus': focus || text });
 
   // --- socket
-  let ws = null, retry = 0, view = null, closing = false, awaitingHello = false;
+  let ws = null, retry = 0, view = null, closing = false, awaitingHello = false, reconnectTimer = null;
   let guessErrTimer = null, localDeadline = null, timeUp = false, guessBtns = [], guessPending = false;
+  let pausedIntent = false, revealClicked = false;
   function clearGuessErr() { clearTimeout(guessErrTimer); guessErrTimer = null; }
   function send(msg) { clearGuessErr(); showError(''); if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg)); }
   function showError(msg) { const e = $('error'); e.textContent = msg || ''; e.hidden = !msg; }
   function ended(msg) {
     if (controller && controller.pause) controller.pause();
-    clearInterval(tick);
-    $('error').hidden = true;
-    app.replaceChildren(el('p', { text: msg }), el('p', {}, el('a', { href: '/', text: 'Home page' })));
+    clearInterval(tick); clearInterval(watchTimer);
+    $('error').hidden = true; $('banner').hidden = true;
+    const code = roomCode();
+    app.replaceChildren(layout([el('div', { class: 'terminal' },
+      el('p', { text: msg }),
+      code ? el('a', { class: 'btn', href: '/login?room=' + encodeURIComponent(code), text: 'Rejoin with Spotify' }) : null,
+      el('a', { class: 'btn secondary', href: '/', text: 'Home page' }))]));
     setEmbedVisible(false); $('embed-note').hidden = true;
   }
   window.addEventListener('pagehide', () => { closing = true; });
   window.addEventListener('pageshow', (e) => { if (e.persisted) location.reload(); });
+  $('retry-now').addEventListener('click', () => {
+    clearTimeout(reconnectTimer); retry = 0;
+    if (ws) { ws.onclose = null; ws.onmessage = null; try { ws.close(); } catch (e) { /* ignore */ } }
+    connect();
+  });
   function connect() {
     ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
-    ws.onopen = () => { awaitingHello = true; retry = 0; $('banner').hidden = true; send({ type: 'hello', key }); };
+    ws.onopen = () => { awaitingHello = true; retry = 0; guessPending = false; $('banner').hidden = true; send({ type: 'hello', key }); };
     ws.onmessage = (ev) => {
       let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
       if (m.type === 'error') {
         if (awaitingHello) { // hello rejected: terminal, do not retry
-          closing = true; ws.close();
+          closing = true; ws.close(); clearSeat();
           if (!view || view.phase !== 'finished') ended('That game is no longer running');
-        }
-        else {
+        } else {
           guessPending = false;
           showError(String(m.message));
-          if (view.phase === 'playing') { // keep guess rejections visible ~3s despite later state broadcasts
+          if (revealClicked && view && view.phase === 'playing') { revealClicked = false; const rb = $('reveal-btn'); if (rb) rb.disabled = false; }
+          if (view && view.phase === 'playing') { // keep guess rejections visible ~3s despite later state broadcasts
             clearGuessErr(); const msg = String(m.message);
             guessErrTimer = setTimeout(() => { guessErrTimer = null; if ($('error').textContent === msg) showError(''); }, 3000);
             if (!timeUp && !view.myGuess) for (const b of guessBtns) b.disabled = false;
           }
         }
-      }
-      else if (m.type === 'state') {
+      } else if (m.type === 'state') {
         awaitingHello = false; if (!guessErrTimer) showError(''); view = m.view;
         if (view.myGuess || view.phase !== 'playing') guessPending = false;
-        const rm = view.round && view.round.remainingMs;
-        localDeadline = view.phase === 'playing' && Number.isFinite(rm) ? performance.now() + rm : null;
+        if (view.phase === 'finished') clearSeat();
+        else if (typeof view.code === 'string' && view.code && view.code !== savedCode) { savedCode = view.code; saveSeat(key, view.code); }
+        const r = view.round || {};
+        pausedIntent = !!r.paused;
+        localDeadline = view.phase === 'playing' && Number.isFinite(r.remainingMs) ? performance.now() + r.remainingMs : null;
         render();
       }
     };
     ws.onclose = (ev) => {
       if (closing) return;
       if (ev.code === 1000) { closing = true; if (!view || view.phase !== 'finished') ended('This session ended (opened elsewhere or the room closed). Rejoin from the home page.'); $('banner').hidden = true; return; }
-      $('banner').textContent = 'Reconnecting…';
+      $('banner-text').textContent = 'Reconnecting…';
       $('banner').hidden = false;
-      setTimeout(connect, Math.min(1000 * 2 ** retry, 5000));
+      reconnectTimer = setTimeout(connect, Math.min(1000 * 2 ** retry, 5000));
       retry++;
     };
   }
 
   // --- host audio: the Spotify embed stays rendered but off-screen; the app's own UI drives it
-  let controller = null, apiFailed = false, loadedUri = null, pendingUri = null;
-  let playClicked = false, playSent = false, fallback = false, watchTimer = null, embedPhase = null;
-  let audioStarted = false, audioPos = 0, audioDur = 0, seeking = false;
+  let controller = null, apiFailed = false, loadedUri = null, pendingUri = null, playerLoaded = false;
+  let playClicked = false, playSent = false, fallback = false, slowLoad = false, watchTimer = null, embedPhase = null;
+  let clickAt = 0, loadedAt = 0, prevPaused;
+  let audioStarted = false, audioPlaying = false, audioPos = 0, audioDur = 0, seeking = false;
+  const timed = () => !!view && !!view.round && view.round.timed !== false;
+  const fmt = (ms) => { const s = Math.max(0, Math.floor(ms / 1000)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
   function setEmbedVisible(v) {
     const w = $('embed-wrap');
     w.className = v ? 'embed-visible' : 'embed-hidden';
     w.setAttribute('aria-hidden', v ? 'false' : 'true');
+    w.inert = !v; // off-screen embed must not take keyboard focus
+  }
+  function sendPause() { if (timed() && !pausedIntent) { pausedIntent = true; send({ type: 'pause' }); } }
+  function sendResume() { if (timed() && pausedIntent) { pausedIntent = false; send({ type: 'resume' }); } }
+  function updateAudioUi() {
+    const tg = $('audio-toggle');
+    if (tg) tg.textContent = audioPlaying ? 'Pause' : 'Resume';
+    const sk = $('audio-seek'), tm = $('audio-time');
+    const text = fmt(audioPos) + ' / ' + fmt(audioDur);
+    if (tm) tm.textContent = text;
+    if (sk && !seeking) { sk.max = Math.max(1, Math.floor(audioDur / 1000)); sk.value = Math.floor(audioPos / 1000); sk.setAttribute('aria-valuetext', text); }
   }
   function onPlayback(e) {
     const d = (e && e.data) || {};
+    playerLoaded = true; if (!loadedAt) loadedAt = performance.now();
     audioPos = Number(d.position) || 0; audioDur = Number(d.duration) || 0;
-    audioStarted = d.isPaused === false && !d.isBuffering;
-    const pr = $('audio-progress');
-    if (pr) { pr.max = audioDur || 1; pr.value = Math.min(audioPos, audioDur || 1); }
-    const st = $('audio-status');
-    if (st) st.textContent = audioStarted ? 'Playing' : 'Waiting for audio…';
-    const tg = $('audio-toggle');
-    if (tg) tg.textContent = audioStarted ? 'Pause' : 'Resume';
-    const sk = $('audio-seek');
-    if (sk && !seeking) { sk.max = Math.max(1, Math.floor(audioDur / 1000)); sk.value = Math.floor(audioPos / 1000); }
+    const was = prevPaused; prevPaused = d.isPaused;
+    audioPlaying = d.isPaused === false;
+    audioStarted = audioPlaying && !d.isBuffering;
+    updateAudioUi();
     if (!view || view.you !== view.hostId) return;
-    // the round starts when sound starts: either our Play click or the embed's own button (fallback)
-    if (audioStarted && view.phase === 'between' && !playSent && (playClicked || fallback)) {
+    // ignore a late event of the previous track: sound must be fresh (near the start or for the loaded uri)
+    const fresh = audioPos < 2000 || (d.playingURI && d.playingURI === loadedUri);
+    // the round starts when sound starts: our Play click, or the embed's own button in the fallback
+    if (audioStarted && fresh && view.phase === 'between' && !playSent && (playClicked || fallback)) {
       playSent = true; fallback = false;
-      clearTimeout(watchTimer);
+      clearInterval(watchTimer);
       send({ type: 'play' });
       syncEmbed();
     }
+    if (view.phase === 'playing') {
+      if (was === false && d.isPaused === true && audioPos < audioDur - 1000) sendPause(); // paused by itself, not the end of the track
+      else if (was === true && d.isPaused === false) sendResume();
+    }
   }
+  // blocked (not just slow) = the player loaded but stayed paused 4 s after the click; slow load gets up to 12 s
   function startWatch() {
-    clearTimeout(watchTimer);
-    watchTimer = setTimeout(() => {
-      if (view && view.phase === 'between' && !playSent) { fallback = true; render(); }
-    }, 3000);
+    clearInterval(watchTimer);
+    watchTimer = setInterval(() => {
+      if (!view || view.phase !== 'between' || playSent) { clearInterval(watchTimer); return; }
+      const now = performance.now();
+      if (!playerLoaded) {
+        if (now - clickAt > 12000) { clearInterval(watchTimer); slowLoad = true; playClicked = false; render(); }
+      } else if (!fallback && now - Math.max(clickAt, loadedAt) > 4000) { fallback = true; render(); }
+    }, 500);
   }
   function loadEmbedScript() {
     window.onSpotifyIframeApiReady = (IFrameAPI) => {
@@ -130,6 +182,7 @@
         { uri: created, width: '100%', height: 80 }, (c) => {
           controller = c; loadedUri = created;
           c.addListener('playback_update', onPlayback);
+          c.addListener('ready', () => { playerLoaded = true; if (!loadedAt) loadedAt = performance.now(); });
           if (pendingUri && pendingUri !== created) { c.loadUri(pendingUri); loadedUri = pendingUri; }
           if (view) render();
         });
@@ -141,24 +194,24 @@
     document.head.appendChild(s);
   }
   let embedStarted = false;
+  // the ONLY place that shows the embed: during reveal, and as the last-resort fallback in between
   function syncEmbed() {
     if (view.you !== view.hostId) return;
     if (embedPhase !== view.phase) { // new phase: reset the play guards
       embedPhase = view.phase;
-      playClicked = playSent = fallback = false;
-      clearTimeout(watchTimer);
+      playClicked = playSent = fallback = slowLoad = false;
+      clearInterval(watchTimer);
       if (view.phase === 'between' && controller && controller.pause) controller.pause();
     }
     if (view.phase === 'finished' && controller && controller.pause) controller.pause();
     if (!embedStarted) { embedStarted = true; pendingUri = view.nextUri || null; loadEmbedScript(); }
     const show = fallback && view.phase === 'between' && !apiFailed;
     setEmbedVisible(show || (view.phase === 'reveal' && !apiFailed));
-    $('embed-wrap').style.order = $('embed-note').style.order = view.phase === 'reveal' ? 15 : 1000; // mobile: under the reveal text
     const note = $('embed-note');
     note.hidden = !(apiFailed || show);
     note.textContent = apiFailed
       ? 'Could not load the Spotify player. Check your connection or ad blocker and reload; the game cannot play audio without it.'
-      : show ? 'Your browser blocked automatic audio. Tap play on the player below to start the round.' : '';
+      : show ? 'Your browser blocked automatic audio. Tap play on the player below to start the round. It shows the song title: look away, or ask someone else to press play.' : '';
     if (view.nextUri && view.nextUri !== loadedUri) {
       pendingUri = view.nextUri;
       playClicked = playSent = fallback = false;
@@ -185,12 +238,13 @@
     if (typeof id !== 'string' || !/^[A-Za-z0-9]{22}$/.test(id)) return null;
     let f = frames.get(id);
     if (!f) {
-      f = el('iframe', { title, height: 80, loading: 'lazy', frameBorder: '0',
+      f = el('iframe', { height: 80, loading: 'lazy', frameBorder: '0',
         allow: 'autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture' });
       f.style.width = '100%';
       f.src = 'https://open.spotify.com/embed/track/' + id + '?utm_source=generator';
       frames.set(id, f);
     }
+    f.title = title;
     return f;
   }
 
@@ -242,6 +296,11 @@
   }
 
   const bufMax = (p) => (Number.isInteger(p) && p >= 1 ? Math.min(20, p - 1) : 20);
+  const settingsSummary = () => {
+    const s = view.settings;
+    return 'Settings: ' + (s.source === 'liked' ? 'liked songs' : 'recently played') + ', ' + s.perPerson + ' songs each, ' +
+      s.buffer + ' removals each, ' + (s.timer === false ? 'no timer' : '20 s timer') + (s.hostPlays ? ', host plays' : ', host only hosts');
+  };
 
   function lobby() {
     const out = [];
@@ -263,26 +322,35 @@
       source.value = s.source;
       const per = el('input', { id: 'f-per', type: 'number', min: 1, max: 25, step: 1, required: true, value: s.perPerson });
       const buffer = el('input', { id: 'f-buffer', type: 'number', min: 0, max: bufMax(s.perPerson), step: 1, required: true, value: s.buffer });
-      const fixMax = () => { buffer.max = bufMax(Number(per.value)); };
+      // lowering songs per person clamps removals to the new max so both can still be sent
+      const fixMax = () => {
+        const m = bufMax(Number(per.value));
+        buffer.max = m;
+        if (per.checkValidity() && Number(buffer.value) > m) buffer.value = m;
+      };
       per.addEventListener('input', fixMax);
+      const nt = el('input', { id: 'f-notimer', type: 'checkbox', checked: s.timer === false });
       const hp = el('input', { id: 'f-hp', type: 'checkbox', checked: s.hostPlays });
       const push = () => {
         fixMax();
         if (!per.checkValidity() || !buffer.checkValidity()) { showError('Songs per person 1-25, removals 0 to songs-1'); return false; }
         showError('');
         send({ type: 'settings', settings: {
-          source: source.value, perPerson: Number(per.value), buffer: Number(buffer.value), hostPlays: hp.checked } });
+          source: source.value, perPerson: Number(per.value), buffer: Number(buffer.value), timer: !nt.checked, hostPlays: hp.checked } });
         return true;
       };
-      for (const i of [source, per, buffer, hp]) i.addEventListener('change', push);
+      for (const i of [source, per, buffer, nt, hp]) i.addEventListener('change', push);
       out.push(el('section', { id: 'lobby-settings' }, el('h2', { text: 'Settings' }),
         el('label', { htmlFor: 'f-source', text: 'Song source' }), source,
         el('label', { htmlFor: 'f-per', text: 'Songs per person' }), per,
         el('label', { htmlFor: 'f-buffer', text: 'Removals each' }), buffer,
         el('p', { class: 'muted', text: 'Everyone ends up with (songs per person - removals) songs in the game; if you do not remove enough, random ones are dropped.' }),
+        el('label', { htmlFor: 'f-notimer' }, nt, 'No timer'),
+        el('p', { class: 'muted', text: 'Rounds end when everyone has guessed or you press Reveal now. Correct guesses score a flat 1000.' }),
         el('label', { htmlFor: 'f-hp' }, hp, 'I play too (host guesses)'),
         btn('Start', () => { if (push()) send({ type: 'start' }); })));
     } else {
+      out.push(el('p', { id: 'settings-summary', class: 'muted', text: settingsSummary() }));
       out.push(el('p', { class: 'muted', text: 'Waiting for the host to start…' }));
     }
     return out;
@@ -323,12 +391,10 @@
     reviewLis = new Map();
     const ready = btn('Ready', () => send({ type: 'ready' }));
     ready.id = 'review-ready';
-    const sec = el('section', {}, el('h2', { text: 'Your songs' }),
-      el('p', { id: 'review-head', class: 'muted' }), el('ul', { id: 'review-list' }), ready,
-      el('p', { id: 'review-status', class: 'muted' }));
-    const out = [sec];
     pendingReviewSync = true;
-    return out;
+    return [el('section', {}, el('h2', { text: 'Your songs' }),
+      el('p', { id: 'review-head', class: 'muted' }), el('ul', { id: 'review-list' }), ready,
+      el('p', { id: 'review-status', class: 'muted' }))];
   }
   let pendingReviewSync = false;
 
@@ -336,29 +402,37 @@
     return el('p', { class: 'muted', text: 'Round ' + (view.round.index + 1) + ' of ' + view.round.total });
   }
 
+  // the host's single "Now playing" card: Play (between) or Pause/seek/time (playing); reveal uses the embed itself
+  function playCard() {
+    const starting = playClicked && !fallback && !playSent;
+    const b = btn('Play', () => {
+      if (apiFailed || !controller) { showError('The Spotify player is not ready yet.'); return; }
+      // same user gesture: start audio here; the round starts when the embed reports sound
+      playClicked = true; fallback = false; playSent = false; slowLoad = false; clickAt = performance.now();
+      try { controller.play(); } catch (e) { showError('Could not start the player.'); }
+      startWatch();
+      render();
+    }, '', 'Play');
+    b.disabled = starting || apiFailed;
+    const msg = apiFailed ? 'The Spotify player failed to load, so audio cannot start. Reload the page or check for an ad blocker.'
+      : starting ? 'Starting audio…'
+      : slowLoad ? 'Spotify is slow to load. Press Play to try again.' : '';
+    return el('section', { id: 'now-playing' }, el('h2', { text: 'Now playing' }), b, msg ? el('p', { class: 'muted', text: msg }) : null);
+  }
+
   function between() {
-    if (isHost()) {
-      const starting = playClicked && !fallback && !playSent;
-      const b = btn('Play', () => {
-        if (apiFailed || !controller) { showError('The Spotify player is not ready yet.'); return; }
-        // same user gesture: start audio here; the round starts when the embed reports sound
-        playClicked = true; fallback = false; playSent = false;
-        try { controller.play(); } catch (e) { showError('Could not start the player.'); }
-        startWatch();
-        render();
-      });
-      b.disabled = starting;
-      const out = [roundHeader(), b];
-      if (starting) out.push(el('p', { class: 'muted', text: 'Starting audio…' }));
-      return out;
-    }
+    if (isHost()) return [roundHeader(), playCard()];
     return [roundHeader(), el('p', { class: 'big', text: 'Get ready' })];
   }
 
   let playRound = -1;
   function updCountdown() {
-    const cd = $('countdown');
-    if (!cd) return;
+    const cd = $('countdown'), pb = $('paused-badge');
+    if (!cd || !view || !view.round) return;
+    const r = view.round;
+    if (r.timed === false) { cd.textContent = 'No timer'; pb.hidden = true; return; }
+    pb.hidden = !r.paused;
+    if (r.paused && Number.isFinite(r.remainingMs)) { cd.textContent = Math.ceil(r.remainingMs / 1000) + 's'; return; }
     if (localDeadline === null) { cd.textContent = ''; return; }
     const ms = Math.max(0, localDeadline - performance.now());
     if (ms === 0) { timeUp = true; cd.textContent = 'Time is up'; for (const b of guessBtns) b.disabled = true; }
@@ -367,21 +441,21 @@
 
   function hostControls() {
     const call = (n, ...a) => { if (typeof controller[n] === 'function') { controller[n](...a); return true; } return false; };
-    const toggle = btn(audioStarted ? 'Pause' : 'Resume', () => {
-      if (audioStarted) call('pause') || call('togglePlay'); else call('resume') || call('togglePlay');
+    const toggle = btn(audioPlaying ? 'Pause' : 'Resume', () => {
+      if (audioPlaying) { call('pause') || call('togglePlay'); sendPause(); } else { call('resume') || call('togglePlay'); sendResume(); }
     }, 'secondary', 'audio-toggle');
     toggle.id = 'audio-toggle';
-    const seek = el('input', { id: 'audio-seek', type: 'range', min: 0, max: Math.max(1, Math.floor(audioDur / 1000)), step: 1, value: Math.floor(audioPos / 1000) });
+    const seek = el('input', { id: 'audio-seek', type: 'range', min: 0, max: Math.max(1, Math.floor(audioDur / 1000)), step: 1, value: Math.floor(audioPos / 1000), 'aria-label': 'Seek' });
     seek.addEventListener('input', () => { seeking = true; });
     seek.addEventListener('change', () => { seeking = false; call('seek', Number(seek.value)); });
-    return [toggle, el('label', { htmlFor: 'audio-seek', text: 'Seek' }), seek,
-      el('p', { class: 'muted', text: 'The round timer keeps running while paused.' })];
+    return [toggle, seek, el('p', { id: 'audio-time', class: 'muted', text: fmt(audioPos) + ' / ' + fmt(audioDur) })];
   }
 
-  // updates only what changed; the host's slider/progress nodes and a seek drag survive broadcasts
+  // updates only what changed; the host's slider/toggle nodes and a seek drag survive broadcasts
   function syncPlaying() {
     const hc = $('host-controls');
     if (hc && controller && !hc.firstChild) hc.append(...hostControls());
+    updateAudioUi();
     const slot = $('play-slot');
     const iAmGuesser = view.settings.hostPlays || !isHost();
     const opts = view.players.filter((p) => !(p.id === view.you || (!view.settings.hostPlays && p.id === view.hostId)));
@@ -412,12 +486,17 @@
   }
 
   function playing() {
-    const out = [roundHeader(), el('p', { class: 'big', id: 'countdown' })];
-    timeUp = false; guessBtns = []; seeking = false; playRound = view.round.index;
+    const out = [roundHeader(), el('div', { class: 'cd-row' }, el('p', { class: 'big', id: 'countdown' }), el('span', { id: 'paused-badge', text: 'Paused', hidden: true }))];
+    timeUp = false; guessBtns = []; seeking = false; revealClicked = false; playRound = view.round.index;
     if (isHost()) {
-      out.push(el('p', { id: 'audio-status', class: 'muted', text: audioStarted ? 'Playing' : 'Waiting for audio…' }),
-        el('progress', { id: 'audio-progress', max: audioDur || 1, value: Math.min(audioPos, audioDur || 1), 'aria-label': 'Playback progress' }),
-        el('div', { id: 'host-controls' }));
+      const card = el('section', { id: 'now-playing' }, el('h2', { text: 'Now playing' }), el('div', { id: 'host-controls' }));
+      if (timed()) card.append(el('p', { class: 'muted', text: 'Pausing also pauses the round timer.' }));
+      else {
+        const rb = btn('Reveal now', () => { if (revealClicked) return; revealClicked = true; rb.disabled = true; send({ type: 'reveal' }); }, '', 'reveal-now');
+        rb.id = 'reveal-btn';
+        card.append(rb, el('p', { class: 'muted', text: 'No timer: pausing only pauses the music.' }));
+      }
+      out.push(card);
     }
     out.push(el('div', { id: 'play-slot' }), scoreboard());
     pendingPlaySync = true;
@@ -435,8 +514,8 @@
     if (streakRound !== view.round.index) { streakLost = prevStreak >= STREAK_MIN && mine === 0; prevStreak = mine; streakRound = view.round.index; }
     const card = el('section', { id: 'reveal-card' }, el('h2', { text: 'It was ' + nameOf(r.ownerId) + '’s song' }));
     card.dataset.round = String(view.round.index);
-    // the host listens through the (now visible) host embed; everyone else gets a slim player
-    const f = isHost() ? null : spotifyFrame(r.track.id, 'Revealed song');
+    // the host listens through the visible host embed (unless it failed to load); everyone else gets a slim player
+    const f = !isHost() || apiFailed ? spotifyFrame(r.track.id, 'Revealed song') : null;
     if (f) card.append(f);
     card.append(el('p', { text: view.myGuess ? (view.myGuess === r.ownerId ? 'You got it! +' + pts : 'Wrong guess, +0') : 'No guess, +0' }));
     if (mine >= STREAK_MIN) card.append(el('p', {}, streakEl(me)));
@@ -458,11 +537,11 @@
     }
   }
 
-  // two columns on desktop (CSS), single column on mobile; inline order keeps the original DOM order there
-  function layout(kids) {
+  // DOM order = visual order; two columns on desktop come from CSS grid areas, not from reordering
+  function layout(kids, sideFirst) {
     const main = el('div', { class: 'main-col' }), side = el('div', { class: 'side-col' });
-    kids.forEach((k, i) => { k.style.order = i * 10; (k.classList.contains('side') ? side : main).append(k); });
-    return el('div', { class: 'layout' }, main, side);
+    for (const k of kids) (k.classList.contains('side') ? side : main).append(k);
+    return el('div', { class: 'layout' }, ...(sideFirst ? [side, main] : [main, side]));
   }
 
   function render() {
@@ -481,13 +560,15 @@
       set('f-source', view.settings.source); set('f-per', view.settings.perPerson);
       set('f-buffer', view.settings.buffer);
       if ($('f-buffer') && document.activeElement !== $('f-per')) $('f-buffer').max = bufMax(view.settings.perPerson);
+      set('f-notimer', view.settings.timer === false);
       set('f-hp', view.settings.hostPlays);
+      if ($('settings-summary')) $('settings-summary').textContent = settingsSummary();
     } else {
       clearInterval(tick);
       const a = document.activeElement;
       const fk = a && a.dataset ? a.dataset.focus || a.id : null;
       const f = phases[view.phase];
-      app.replaceChildren(layout(f ? f() : [el('p', { text: 'Unknown state' })]));
+      app.replaceChildren(layout(f ? f() : [el('p', { text: 'Unknown state' })], view.phase === 'lobby'));
       if (pendingReviewSync) { pendingReviewSync = false; syncReview(); }
       if (pendingPlaySync) { pendingPlaySync = false; syncPlaying(); updCountdown(); }
       if (fk) {
@@ -501,6 +582,8 @@
     syncEmbed();
   }
 
-  if (!key) { app.replaceChildren(el('p', {}, 'No session. ', el('a', { href: '/', text: 'Go back' }))); }
-  else connect();
+  if (!key) {
+    app.replaceChildren(layout([el('div', { class: 'terminal' }, el('p', { text: 'No session.' }),
+      el('a', { class: 'btn secondary', href: '/', text: 'Home page' }))]));
+  } else connect();
 })();

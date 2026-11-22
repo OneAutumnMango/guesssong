@@ -11,7 +11,7 @@
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
 body { margin: 0; background: var(--bg); color: var(--fg); font: 18px/1.4 system-ui, sans-serif; overflow-x: hidden; }
-main { max-width: 480px; margin: 0 auto; padding: 16px; }
+main { max-width: 520px; margin: 0 auto; padding: 16px; }
 h1 { font-size: 1.6rem; margin: 0 0 16px; }
 h2 { font-size: 1.2rem; margin: 0 0 8px; }
 section { background: var(--card); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
@@ -26,10 +26,11 @@ button, .btn {
   border-color: transparent; font-weight: 600; text-align: center; text-decoration: none; cursor: pointer;
   overflow-wrap: anywhere;
 }
-button.secondary { background: var(--bg); color: var(--fg); border-color: var(--border); }
+button.secondary, .btn.secondary { background: var(--bg); color: var(--fg); border-color: var(--border); }
 button:disabled { opacity: .55; cursor: default; }
 input[type=text], input[type=number], input:not([type]), select { width: 100%; margin: 4px 0 12px; }
 input[type=checkbox] { min-height: 0; width: 24px; height: 24px; vertical-align: middle; margin-right: 8px; }
+input[type=range] { width: 100%; padding: 0; margin: 4px 0; accent-color: var(--accent); }
 label { display: block; }
 :focus-visible { outline: 3px solid var(--fg); outline-offset: 2px; }
 ul { list-style: none; padding: 0; margin: 0; }
@@ -37,41 +38,49 @@ li { padding: 8px 0; border-bottom: 1px solid var(--border); display: flex; just
 li:last-child { border-bottom: 0; }
 li .grow { flex: 1; min-width: 0; }
 .track { flex-direction: column; }
+.track iframe { display: block; width: 100%; border: 0; }
+.track button { margin-top: 4px; }
 .big { font-size: 2.4rem; font-weight: 700; text-align: center; margin: 8px 0; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.streak { margin-left: .35em; white-space: nowrap; }
 #banner, #error { padding: 10px 14px; border-radius: 10px; margin-bottom: 12px; font-weight: 600; }
-#banner { background: var(--card); border: 1px solid var(--border); }
+#banner { background: var(--card); border: 1px solid var(--border); display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+#banner[hidden], #error[hidden] { display: none; }
+#banner button { display: inline-block; width: auto; margin: 0; }
 #error { border: 2px solid var(--danger); color: var(--danger); }
 #dev-banner { background: var(--fg); color: var(--bg); font-size: .8rem; font-weight: 700; letter-spacing: .1em; text-align: center; padding: 4px 8px; border-radius: 6px; margin-bottom: 12px; }
 .qr-wrap { width: fit-content; max-width: 100%; margin: 0 auto 12px; }
 .qr-wrap img { display: block; width: 200px; height: auto; aspect-ratio: 1; max-width: 100%; }
-.qr-wrap img[hidden] { display: none; }
+.qr-wrap img[hidden], .qr-wrap[hidden] { display: none; }
 .selectable { user-select: text; overflow-wrap: anywhere; text-align: center; }
-.qr-wrap[hidden] { display: none; }
 #qr-url a { color: var(--accent); text-decoration: underline; }
-#embed-note { margin-top: 12px; font-weight: 600; }
-/* off-screen but rendered: display:none / visibility:hidden can stop playback */
-.embed-hidden { position: fixed; left: -10000px; top: 0; width: 300px; height: 80px; }
-.embed-visible { width: 100%; min-height: 80px; margin-top: 8px; }
-.embed-visible iframe, .embed-hidden iframe { width: 100%; border: 0; }
-progress { width: 100%; height: 14px; margin-bottom: 12px; accent-color: var(--accent); }
+.cd-row { display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap; }
+#paused-badge { background: var(--fg); color: var(--bg); border-radius: 999px; padding: 2px 12px; font-weight: 700; font-size: .9rem; }
+#paused-badge[hidden] { display: none; }
+#audio-time { text-align: center; margin: 0 0 8px; }
 .guess-grid button { margin: 8px 0; }
-/* mobile: main is a flex column; wrappers vanish and inline order restores DOM order (the host embed slots in via order) */
-main { display: flex; flex-direction: column; }
-#dev-banner, #banner, #error { order: -1; }
-#app, .layout, .main-col, .side-col { display: contents; }
-.main-col > *, .side-col > * { min-width: 0; }
+
+/* game page: the embed lives in #stage so it never moves; wrappers vanish on mobile (DOM order = visual order) */
+#embed-note { margin-bottom: 12px; font-weight: 600; }
+/* off-screen but rendered: display:none / visibility:hidden can stop playback */
+.embed-hidden { position: fixed; left: -10000px; top: 0; width: 300px; height: 80px; overflow: hidden; }
+.embed-hidden h2 { display: none; }
+.embed-visible { background: var(--card); border-radius: 12px; padding: 16px; margin-bottom: 16px; width: 100%; }
+.embed-visible iframe { width: 100%; border: 0; display: block; }
+body.game #app, body.game .layout, body.game .main-col, body.game .side-col { display: contents; }
 @media (min-width: 900px) {
-  body { font-size: 18px; }
-  main { max-width: 1100px; padding: 32px; display: grid; grid-template-columns: 2fr 1fr; column-gap: 24px; row-gap: 0; align-items: start; }
-  h1 { font-size: 2.2rem; }
-  h2 { font-size: 1.4rem; }
-  #dev-banner, #banner, #error { grid-column: 1 / -1; }
-  .main-col { display: block; grid-column: 1; grid-row: 10; min-width: 0; }
-  .side-col { display: block; grid-column: 2; grid-row: 10 / span 3; min-width: 0; }
-  #embed-note { grid-column: 1; grid-row: 11; }
-  #embed-wrap.embed-visible { grid-column: 1; grid-row: 12; }
-  .main-col > *, .side-col > * { order: 0 !important; }
-  .side-col:empty { display: none; }
-  .guess-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
-  .guess-grid button { margin: 0; min-height: 72px; }
+  body.game main { max-width: 1100px; padding: 32px; }
+  body.game { font-size: 18px; }
+  body.game h2 { font-size: 1.4rem; }
+  body.game #stage {
+    display: grid; grid-template-columns: 2fr 1fr; column-gap: 24px; align-items: start;
+    grid-template-areas: "note side" "embed side" "main side"; grid-template-rows: auto auto 1fr;
+  }
+  body.game #embed-note { grid-area: note; }
+  body.game #embed-wrap.embed-visible { grid-area: embed; }
+  body.game .main-col { display: block; grid-area: main; min-width: 0; }
+  body.game .side-col { display: block; grid-area: side; min-width: 0; }
+  body.game .side-col:empty { display: none; }
+  body.game .guess-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
+  body.game .guess-grid button { margin: 0; min-height: 72px; }
 }

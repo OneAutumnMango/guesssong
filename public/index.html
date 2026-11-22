@@ -6,9 +6,14 @@
 <title>Guess the Song</title>
 <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body class="home">
 <main>
   <h1>Guess the Song</h1>
+  <section id="resume" hidden>
+    <h2>Your game</h2>
+    <a class="btn" id="resume-link" href="/play.html">Rejoin game</a>
+    <button type="button" class="secondary" id="forget">Forget this game</button>
+  </section>
   <section>
     <h2>Host a game</h2>
     <a class="btn" href="/login?room=new">Create room</a>
@@ -28,6 +33,18 @@ document.getElementById('join').addEventListener('submit', (e) => {
   const code = document.getElementById('code').value.trim().toUpperCase();
   location.href = '/login?room=' + encodeURIComponent(code);
 });
+// saved seat from the last game (localStorage, 12 h)
+try {
+  const s = JSON.parse(localStorage.getItem('gs.seat'));
+  if (s && typeof s.key === 'string' && Date.now() - s.savedAt < 12 * 3600 * 1000) {
+    document.getElementById('resume-link').textContent = /^[A-Z]{4}$/.test(s.code) ? 'Rejoin game ' + s.code : 'Rejoin game';
+    document.getElementById('resume').hidden = false;
+    document.getElementById('forget').addEventListener('click', () => {
+      try { localStorage.removeItem('gs.seat'); sessionStorage.removeItem('key'); } catch (e) { /* ignore */ }
+      document.getElementById('resume').hidden = true;
+    });
+  } else if (s) localStorage.removeItem('gs.seat');
+} catch (e) { /* storage blocked or bad data */ }
 </script>
 </body>
 </html>
