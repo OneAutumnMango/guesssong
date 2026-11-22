@@ -108,28 +108,41 @@
   // --- rendering
   let tick = null, lastPhase = null;
   const isHost = () => view.you === view.hostId;
-  const nameOf = (id) => { const p = view.players.find((x) => x.id === id); return p ? p.name : '?'; };
+  const tag = (p) => p.name + (p.bot ? ' (test)' : '');
+  const nameOf = (id) => { const p = view.players.find((x) => x.id === id); return p ? tag(p) : '?'; };
 
   function scoreboard() {
     const sorted = [...view.players].sort((a, b) => b.score - a.score);
     const d = (view.reveal && view.reveal.deltas) || {};
     return el('section', {}, el('h2', { text: 'Scoreboard' }),
       el('ul', {}, ...sorted.map((p) => el('li', {},
-        el('span', { class: 'grow', text: p.name + (p.id === view.you ? ' (you)' : '') }),
+        el('span', { class: 'grow', text: tag(p) + (p.id === view.you ? ' (you)' : '') }),
         el('span', { text: String(p.score) + (view.phase === 'reveal' && d[p.id] ? ' (+' + d[p.id] + ')' : '') })))));
+  }
+
+  function syncBots() {
+    const a = document.querySelector('[data-focus="add-bot"]'), r = document.querySelector('[data-focus="remove-bot"]');
+    if (a) a.disabled = view.players.length >= 8;
+    if (r) r.disabled = !view.players.some((p) => p.bot);
   }
 
   function lobbyPlayers() {
     return [el('h2', { text: 'Room' }),
       el('p', { class: 'big', text: view.code || '' }),
       el('ul', {}, ...view.players.map((p) => el('li', {},
-        el('span', { class: 'grow', text: p.name + (p.id === view.hostId ? ' (host)' : '') + (p.id === view.you ? ' (you)' : '') }),
+        el('span', { class: 'grow', text: tag(p) + (p.id === view.hostId ? ' (host)' : '') + (p.id === view.you ? ' (you)' : '') }),
         el('span', { class: 'muted', text: p.connected ? '' : 'offline' }))))];
   }
 
   function lobby() {
     const out = [];
     out.push(el('section', { id: 'lobby-players' }, ...lobbyPlayers()));
+    if (view.dev && isHost()) {
+      out.push(el('section', { id: 'lobby-bots' }, el('h2', { text: 'Test players' }),
+        btn('Add test player', () => send({ type: 'addBot' }), '', 'add-bot'),
+        btn('Remove test player', () => send({ type: 'removeBot' }), 'secondary', 'remove-bot')));
+      syncBots();
+    }
     if (isHost()) {
       const s = view.settings;
       const source = el('select', { id: 'f-source' }, el('option', { value: 'recents', text: 'Recently played' }), el('option', { value: 'liked', text: 'Liked songs' }));
@@ -203,7 +216,7 @@
       out.push(el('h2', { text: 'Whose song is this?' }));
       for (const p of view.players) {
         if (p.id === view.you || (!view.settings.hostPlays && p.id === view.hostId)) continue;
-        out.push(btn(p.name, () => send({ type: 'guess', playerId: p.id }), '', 'guess-' + p.id));
+        out.push(btn(tag(p), () => send({ type: 'guess', playerId: p.id }), '', 'guess-' + p.id));
       }
     }
     out.push(scoreboard());
@@ -225,10 +238,20 @@
   function finished() { return [el('h2', { text: 'Game over' }), scoreboard()]; }
 
   const phases = { lobby, review, between, playing, reveal, finished };
+  function devBanner() {
+    let b = $('dev-banner');
+    if (!view.dev) { if (b) b.remove(); return; }
+    if (!b) {
+      b = el('div', { id: 'dev-banner', text: 'DEV MODE' });
+      document.querySelector('main').prepend(b);
+    }
+  }
+
   function render() {
     if (view.phase === 'lobby' && lastPhase === 'lobby' && $('lobby-players')) {
       // keep the settings form (typing, focus) intact; only refresh the player list and idle fields
       $('lobby-players').replaceChildren(...lobbyPlayers());
+      syncBots();
       const set = (id, v) => { const f = $(id); if (f && document.activeElement !== f) f[typeof v === 'boolean' ? 'checked' : 'value'] = v; };
       set('f-source', view.settings.source); set('f-total', view.settings.total);
       set('f-buffer', view.settings.buffer); set('f-hp', view.settings.hostPlays);
@@ -244,6 +267,7 @@
       }
     }
     lastPhase = view.phase;
+    devBanner();
     syncEmbed();
   }
 
