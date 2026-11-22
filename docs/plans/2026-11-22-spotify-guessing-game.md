@@ -172,7 +172,7 @@
 **Security flag:** `security`
 **Does NOT cover:** persistence across restarts, rate limiting, and HTTPS (terminated by the Cloudflare Tunnel).
 
-- [ ] **Step 1: Write failing integration test** `test/integration.test.js`: start `createServer` on an ephemeral port with stub `spotify` functions (pools of 20 distinct tracks per player) and `durationMs: 300`. Using the real `ws` client:
+- [x] **Step 1: Write failing integration test** `test/integration.test.js`: start `createServer` on an ephemeral port with stub `spotify` functions (pools of 20 distinct tracks per player) and `durationMs: 300`. Using the real `ws` client:
   - Host `/callback` creates room `X`; a second player joins with `/login?room=X`. Both then say `hello` with their `key` and receive a `state` in the `lobby` phase.
   - Non-host `start` / `settings` / `next` / `play` messages are rejected with an `error`.
   - Host `settings {total: 4, buffer: 1}`, `start`, then each player removes ≤ 1 track and sends `ready`. The phase becomes `between`.
@@ -183,10 +183,10 @@
   - A second socket for an existing `key` gets the current `state` (reconnect).
   - After the `finished` phase the room is removed (a `/login?room=<CODE>` for that code then fails).
   - A `/../` path request does not read files outside `public/`.
-- [ ] **Step 2:** Run `npm test`. Expected: FAIL.
-- [ ] **Step 3: Implement** `createServer` in `src/server.js` using `node:http` and `ws`. Keep these structures in memory: `pending: Map<state, {verifier, room, createdAt}>` (swept after 10 minutes), `rooms: Map<code, {game, players: Map<key, {id, token, socket}>, timer}>`. Only the host can send `settings`, `start`, `play`, `next`. On `start`, call `fetchPool(token, settings.source)` for each participant, run `game.start(pools)`, and delete every stored `token`. On `play`, call `beginRound()` and set a `setTimeout` for `durationMs` to `endRound()`. Also call `endRound()` and clear the timer as soon as `allGuessed()` is true. Broadcast the state after each change. Delete the room when `phase` becomes `finished` and the clients have been sent the final state.
-- [ ] **Step 4:** Run `npm test`. Expected: PASS.
-- [ ] **Step 5: Commit** `git add src/server.js test/integration.test.js && git commit -m "Add server with OAuth and websocket game flow"`
+- [x] **Step 2:** Run `npm test`. Expected: FAIL.
+- [x] **Step 3: Implement** `createServer` in `src/server.js` using `node:http` and `ws`. Keep these structures in memory: `pending: Map<state, {verifier, room, createdAt}>` (swept after 10 minutes), `rooms: Map<code, {game, players: Map<key, {id, token, socket}>, timer}>`. Only the host can send `settings`, `start`, `play`, `next`. On `start`, call `fetchPool(token, settings.source)` for each participant, run `game.start(pools)`, and delete every stored `token`. On `play`, call `beginRound()` and set a `setTimeout` for `durationMs` to `endRound()`. Also call `endRound()` and clear the timer as soon as `allGuessed()` is true. Broadcast the state after each change. Delete the room when `phase` becomes `finished` and the clients have been sent the final state.
+- [x] **Step 4:** Run `npm test`. Expected: PASS.
+- [x] **Step 5: Commit** `git add src/server.js test/integration.test.js && git commit -m "Add server with OAuth and websocket game flow"`
 
 ---
 
@@ -202,17 +202,17 @@
 **Security flag:** `none`
 **Does NOT cover:** automated browser tests (verified by hand in Task 6), offline use.
 
-- [ ] **Step 1: `index.html`**: two actions, "Create room" (→ `/login?room=new`) and "Join" (a code field → `/login?room=<CODE>`).
-- [ ] **Step 2: `play.html` + `app.js`**: read `key` from the URL hash and store it in `sessionStorage` so a reload reconnects. Open the WebSocket, send `hello`, then re-render on every `state`. Show errors from `{type:'error'}` in a banner. One render function per phase:
+- [x] **Step 1: `index.html`**: two actions, "Create room" (→ `/login?room=new`) and "Join" (a code field → `/login?room=<CODE>`).
+- [x] **Step 2: `play.html` + `app.js`**: read `key` from the URL hash and store it in `sessionStorage` so a reload reconnects. Open the WebSocket, send `hello`, then re-render on every `state`. Show errors from `{type:'error'}` in a banner. One render function per phase:
   - `lobby`: room code, player list, and for the host the settings form (source, total, buffer, host-plays) and a Start button.
   - `review`: the player's own songs, each with a Remove button until `removalsLeft` is 0, then a Ready button.
   - `between`: the host sees a large Play button, and others see "Get ready".
   - `playing`: for guessers, one large button per other player (tap targets ≥ 48px), with a visible countdown from `deadline`. After guessing, show "Locked in". The host sees the embed.
   - `reveal`: the owner and song title/artist, this round's points, and the scoreboard. The host also sees a Next button.
   - `finished`: the final scoreboard.
-- [ ] **Step 3: Host playback.** The host's page loads `https://open.spotify.com/embed/iframe-api/v1` and creates one `IFrameAPI` controller. Whenever `nextUri` changes, call `controller.loadUri(nextUri)`. The Play button's click handler calls `controller.play()` and then sends `{type:'play'}` (it must be the same user-gesture handler, so mobile browsers allow audio).
-- [ ] **Step 4: `style.css`**: mobile-first, single column, readable at 360px width, no horizontal scroll, and light/dark via `prefers-color-scheme`. Use `textContent` (never `innerHTML`) for any player-supplied text such as names and song titles.
-- [ ] **Step 5: Commit** `git add public && git commit -m "Add client UI"`
+- [x] **Step 3: Host playback.** The host's page loads `https://open.spotify.com/embed/iframe-api/v1` and creates one `IFrameAPI` controller. Whenever `nextUri` changes, call `controller.loadUri(nextUri)`. The Play button's click handler calls `controller.play()` and then sends `{type:'play'}` (it must be the same user-gesture handler, so mobile browsers allow audio).
+- [x] **Step 4: `style.css`**: mobile-first, single column, readable at 360px width, no horizontal scroll, and light/dark via `prefers-color-scheme`. Use `textContent` (never `innerHTML`) for any player-supplied text such as names and song titles.
+- [x] **Step 5: Commit** `git add public && git commit -m "Add client UI"`
 
 ---
 
