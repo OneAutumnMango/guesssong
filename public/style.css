@@ -1,94 +1,167 @@
+/* Palette unchanged. Layout idea: phone = one column with the primary action pinned in the thumb zone;
+   desktop (>=900px) = a stage on the left and a ruled side rail on the right. Cards are reserved for the
+   one thing you are looking at (now playing, the reveal, the player); everything else sits on the page. */
 :root {
   --bg: #ffffff; --fg: #15181c; --muted: #5b6470; --card: #f2f4f7;
   --accent: #1a7f3c; --accent-fg: #ffffff; --danger: #b42318; --border: #c9d0d9;
+  --rule: #e1e5ea;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #101317; --fg: #eef1f4; --muted: #a0a9b5; --card: #1b2027;
     --accent: #3ddc84; --accent-fg: #06210f; --danger: #ff8a80; --border: #3a424d;
+    --rule: #262c34;
   }
 }
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
-body { margin: 0; background: var(--bg); color: var(--fg); font: 18px/1.4 system-ui, sans-serif; overflow-x: hidden; }
-main { max-width: 520px; margin: 0 auto; padding: 16px; }
-h1 { font-size: 1.6rem; margin: 0 0 16px; }
-h2 { font-size: 1.2rem; margin: 0 0 8px; }
-section { background: var(--card); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 17px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; overflow-x: hidden; }
+main { max-width: 640px; margin: 0 auto; padding: 20px 20px 32px; }
+h1, h2 { letter-spacing: -.02em; line-height: 1.1; }
+h1 { font-size: 2.6rem; font-weight: 800; margin: 0 0 12px; }
+h2 { font-size: 1.15rem; font-weight: 700; margin: 0 0 12px; }
+section { margin: 0 0 32px; }
 p { margin: 0 0 12px; overflow-wrap: anywhere; }
 .muted { color: var(--muted); }
 button, .btn, input, select {
-  font: inherit; min-height: 48px; border-radius: 10px; border: 1px solid var(--border);
-  padding: 8px 14px; background: var(--bg); color: var(--fg); max-width: 100%;
+  font: inherit; min-height: 52px; border-radius: 14px; border: 1px solid var(--border);
+  padding: 8px 16px; background: var(--bg); color: var(--fg); max-width: 100%;
 }
 button, .btn {
-  display: block; width: 100%; margin: 8px 0; background: var(--accent); color: var(--accent-fg);
-  border-color: transparent; font-weight: 600; text-align: center; text-decoration: none; cursor: pointer;
-  overflow-wrap: anywhere;
+  display: flex; align-items: center; justify-content: center; width: 100%; margin: 8px 0; background: var(--accent); color: var(--accent-fg);
+  border-color: transparent; font-weight: 700; text-align: center; text-decoration: none; cursor: pointer;
+  overflow-wrap: anywhere; transition: transform .08s;
 }
-button.secondary, .btn.secondary { background: var(--bg); color: var(--fg); border-color: var(--border); }
-button:disabled { opacity: .55; cursor: default; }
-input[type=text], input[type=number], input:not([type]), select { width: 100%; margin: 4px 0 12px; }
-input[type=checkbox] { min-height: 0; width: 24px; height: 24px; vertical-align: middle; margin-right: 8px; }
+button:active:not(:disabled), .btn:active { transform: scale(.98); }
+button.secondary, .btn.secondary { background: transparent; color: var(--fg); border-color: var(--border); }
+button:disabled { opacity: .5; cursor: default; }
+input[type=text], input[type=number], input:not([type]), select { width: 100%; margin: 4px 0 16px; }
+input[type=checkbox] { min-height: 0; width: 24px; height: 24px; vertical-align: middle; margin-right: 10px; accent-color: var(--accent); }
 input[type=range] { width: 100%; padding: 0; margin: 4px 0; accent-color: var(--accent); }
-label { display: block; }
+label { display: block; color: var(--muted); font-size: .9rem; font-weight: 600; }
+label:has(> input[type=checkbox]) { color: var(--fg); font-size: 1rem; margin: 4px 0 8px; }
 :focus-visible { outline: 3px solid var(--fg); outline-offset: 2px; }
 ul { list-style: none; padding: 0; margin: 0; }
-li { padding: 8px 0; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; gap: 8px; overflow-wrap: anywhere; }
+li { padding: 10px 0; border-bottom: 1px solid var(--rule); display: flex; justify-content: space-between; align-items: baseline; gap: 12px; overflow-wrap: anywhere; }
 li:last-child { border-bottom: 0; }
 li .grow { flex: 1; min-width: 0; }
-.track { flex-direction: column; }
+.track { flex-direction: column; align-items: stretch; }
 .track iframe { display: block; width: 100%; border: 0; }
-.track button { margin-top: 4px; }
-.big { font-size: 2.4rem; font-weight: 700; text-align: center; margin: 8px 0; }
+.track { gap: 8px; }
+.track button { margin: 0; min-height: 44px; }
+.big { font-size: 2rem; font-weight: 800; letter-spacing: -.02em; margin: 4px 0 12px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .streak { margin-left: .35em; white-space: nowrap; }
-#banner, #error { padding: 10px 14px; border-radius: 10px; margin-bottom: 12px; font-weight: 600; }
+.terminal { padding-top: 12vh; }
+
+/* messages stay in view on a long phone screen */
+#banner, #error { position: sticky; top: 8px; z-index: 5; padding: 12px 16px; border-radius: 14px; margin-bottom: 16px; font-weight: 600; }
 #banner { background: var(--card); border: 1px solid var(--border); display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 #banner[hidden], #error[hidden] { display: none; }
-#banner button { display: inline-block; width: auto; margin: 0; }
-#error { border: 2px solid var(--danger); color: var(--danger); }
-#dev-banner { background: var(--fg); color: var(--bg); font-size: .8rem; font-weight: 700; letter-spacing: .1em; text-align: center; padding: 4px 8px; border-radius: 6px; margin-bottom: 12px; }
-.qr-wrap { width: fit-content; max-width: 100%; margin: 0 auto 12px; }
-.qr-wrap img { display: block; width: 200px; height: auto; aspect-ratio: 1; max-width: 100%; }
-.qr-wrap img[hidden], .qr-wrap[hidden] { display: none; }
-.selectable { user-select: text; overflow-wrap: anywhere; text-align: center; }
-#qr-url a { color: var(--accent); text-decoration: underline; }
-.cd-row { display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap; }
-#paused-badge { background: var(--fg); color: var(--bg); border-radius: 999px; padding: 2px 12px; font-weight: 700; font-size: .9rem; }
-#paused-badge[hidden] { display: none; }
-#audio-time { text-align: center; margin: 0 0 8px; }
-.guess-grid button { margin: 8px 0; }
+#banner button { display: inline-flex; width: auto; min-height: 40px; margin: 0; }
+#error { background: var(--bg); border: 2px solid var(--danger); color: var(--danger); }
+#dev-banner { background: var(--fg); color: var(--bg); font-size: .75rem; font-weight: 700; text-align: center; padding: 3px 10px; border-radius: 999px; width: fit-content; margin: 0 auto 12px; }
 
-/* game page: the embed lives in #stage so it never moves; DOM order = visual order, desktop columns via grid areas */
-#embed-note { margin-bottom: 12px; font-weight: 600; }
+/* room code + QR */
+#lobby-players .big { font-size: clamp(3rem, 14vw, 4.5rem); font-weight: 800; letter-spacing: .1em; color: var(--accent); margin: 0 0 12px; line-height: 1; }
+.qr-wrap { width: fit-content; max-width: 100%; margin: 0 0 12px; background: #fff; padding: 6px; border-radius: 14px; }
+.qr-wrap img { display: block; width: 240px; height: auto; aspect-ratio: 1; max-width: 100%; }
+.qr-wrap img[hidden], .qr-wrap[hidden] { display: none; }
+.selectable { user-select: text; overflow-wrap: anywhere; }
+#qr-url a { color: var(--accent); text-decoration: underline; }
+
+/* the round: big timer, then the guess tiles */
+.cd-row { margin-bottom: 24px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+#countdown { font-size: clamp(3.5rem, 16vw, 6rem); line-height: 1; font-variant-numeric: tabular-nums; margin: 0; }
+#paused-badge { background: var(--fg); color: var(--bg); border-radius: 999px; padding: 2px 14px; font-weight: 700; font-size: .9rem; }
+#paused-badge[hidden] { display: none; }
+#play-slot { margin-top: 20px; }
+#play-slot .big { font-size: 1.6rem; }
+.guess-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.guess-grid button { margin: 0; min-height: 44px; background: var(--card); color: var(--fg); border: 1px solid var(--border); border-radius: 12px; font-size: .95rem; }
+.guess-grid button:hover:not(:disabled) { border-color: var(--accent); }
+.guess-grid button:active:not(:disabled) { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+
+/* the one-thing-you-look-at cards */
+/* every card uses the same 10px frame as the song-review tiles */
+#now-playing, #reveal-card, .embed-visible { background: var(--card); border-radius: 18px; padding: 10px; margin-bottom: 24px; }
+#now-playing h2, .embed-visible h2 { font-size: 1rem; color: var(--muted); }
+#now-playing > :last-child, #reveal-card > :last-child { margin-bottom: 0; line-height: 1.1; } /* half-leading of a tall last line would make the bottom gap bigger than the top */
+#reveal-card .streak { margin-left: 0; }
+/* headings have empty space above their caps, so text-first cards get less top padding to look even */
+#reveal-card { padding-top: 4px; }
+#now-playing, .embed-visible { padding-top: 7px; }
+#reveal-card h2 { font-size: clamp(1.6rem, 6vw, 2.4rem); font-weight: 800; }
+#reveal-card iframe { display: block; width: 100%; border: 0; margin-bottom: 10px; }
+.embed-visible iframe { width: 100%; border: 0; display: block; }
+#embed-note { margin-bottom: 16px; font-weight: 600; }
+
+/* scoreboard: ranked by position, no card */
+#scoreboard ul { counter-reset: rank; }
+#scoreboard li { counter-increment: rank; font-size: 1.05rem; }
+#scoreboard li::before { content: counter(rank); flex: none; width: 1.4em; color: var(--muted); font-variant-numeric: tabular-nums; }
+#scoreboard li > span:last-child { font-weight: 700; font-variant-numeric: tabular-nums; }
+
+/* host music control: one line, icon + slider + time */
+.music-row { display: flex; flex-wrap: nowrap; align-items: center; gap: 12px; }
+.music-row .icon-btn { flex: none; min-width: 0; width: 52px; height: 52px; min-height: 52px; margin: 0; padding: 0; display: flex; align-items: center; justify-content: center; border-radius: 50%; }
+.music-row input[type=range] { flex: 1 1 auto; min-width: 0; width: auto; margin: 0; }
+.music-time { flex: none; margin: 0; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--muted); }
+
 /* off-screen but rendered: display:none / visibility:hidden can stop playback */
 /* Must stay INSIDE the viewport: Spotify marks its iframe loading="lazy", so one parked off-screen
    (left:-10000px) never loads and Play silently does nothing. Invisible + unclickable instead. */
 .embed-hidden { position: fixed; right: 0; bottom: 0; width: 300px; height: 80px; overflow: hidden; opacity: 0; pointer-events: none; z-index: -1; }
 .embed-hidden h2 { display: none; }
-.embed-visible { background: var(--card); border-radius: 12px; padding: 16px; margin-bottom: 16px; width: 100%; }
-.embed-visible iframe { width: 100%; border: 0; display: block; }
+
+/* home */
+body.home main { min-height: 100dvh; display: flex; flex-direction: column; justify-content: center; }
+.lede { color: var(--muted); font-size: 1.1rem; margin-bottom: 40px; }
+body.home section { padding-top: 24px; border-top: 1px solid var(--rule); }
+#join { display: grid; grid-template-columns: 1fr auto; gap: 6px 10px; align-items: stretch; }
+#join label { grid-column: 1 / -1; }
+#join input { margin: 0; text-align: center; font-size: 1.4rem; font-weight: 700; letter-spacing: .3em; text-transform: uppercase; }
+#join button { width: auto; margin: 0; padding-inline: 28px; }
+
+/* phone: primary actions pinned where the thumb is */
+@media (max-width: 899px) {
+  #app-foot { position: sticky; bottom: 0; padding: 12px 0 calc(12px + env(safe-area-inset-bottom)); background: linear-gradient(transparent, var(--bg) 30%); }
+  #app-foot:empty { display: none; }
+  #lobby-settings > button:last-child, #review-ready { position: sticky; bottom: 12px; box-shadow: 0 0 0 10px var(--bg); }
+  #app-side { margin-top: 8px; }
+}
+
+/* desktop: DOM order = visual order; the stage and the side rail come from grid areas */
 @media (min-width: 900px) {
-  body.game main { max-width: 1100px; padding: 32px; }
-  body.game { font-size: 18px; }
-  body.game h2 { font-size: 1.4rem; }
+  body { font-size: 18px; }
+  main { max-width: 1120px; padding: 48px 48px 64px; }
+  button, .btn { width: auto; min-width: 180px; padding-inline: 28px; }
+  .guess-grid button, .track button { width: 100%; }
+  h1 { font-size: 3rem; }
+
   body.game #stage {
-    display: grid; grid-template-columns: 2fr 1fr; column-gap: 24px; align-items: start;
+    display: grid; grid-template-columns: minmax(0, 1fr) 320px; column-gap: 56px; align-items: start;
     grid-template-areas: "main side" "note side" "embed side" "foot side"; grid-template-rows: auto auto auto 1fr;
   }
+  body.game #stage:has(#app-side:empty) { grid-template-columns: minmax(0, 1fr); grid-template-areas: "main" "note" "embed" "foot"; }
   body.game #app { grid-area: main; min-width: 0; }
   body.game #embed-note { grid-area: note; }
   body.game #embed-wrap.embed-visible { grid-area: embed; }
   body.game #app-foot { grid-area: foot; min-width: 0; }
-  body.game #app-side { grid-area: side; min-width: 0; }
+  body.game #app-side { grid-area: side; min-width: 0; padding-left: 40px; border-left: 1px solid var(--rule); align-self: stretch; }
   body.game #app-side:empty { display: none; }
-  body.game .guess-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
-  body.game .guess-grid button { margin: 0; min-height: 72px; }
-}
+  body.game #app > section, body.game #app > p { max-width: 36rem; }
+  body.game #app > section#now-playing, body.game #app > #play-slot, body.game #app > .cd-row { max-width: none; }
+  .guess-grid { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
+  .guess-grid button { min-height: 48px; font-size: 1rem; }
+  #review-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; }
+  #review-list li { background: var(--card); border: 0; border-radius: 18px; padding: 10px; }
+  .qr-wrap img { width: 268px; }
 
-/* host music control: one line, icon + slider + time */
-.music-row { display: flex; flex-wrap: nowrap; align-items: center; gap: 12px; }
-.music-row .icon-btn { flex: none; width: 48px; height: 48px; min-height: 48px; margin: 0; padding: 0; display: flex; align-items: center; justify-content: center; border-radius: 50%; }
-.music-row input[type=range] { flex: 1 1 auto; min-width: 0; width: auto; margin: 0; }
-.music-time { flex: none; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--muted); }
+  body.home main { display: grid; grid-template-columns: minmax(0, 1fr) 400px; column-gap: 112px; align-content: center; max-width: 1120px; }
+  body.home header { grid-column: 1; grid-row: 1 / span 4; align-self: center; }
+  body.home h1 { font-size: clamp(4rem, 7vw, 6rem); line-height: .95; margin: 0 0 24px; }
+  body.home .lede { margin: 0; max-width: 24rem; }
+  body.home section { grid-column: 2; margin: 0; padding: 28px 0; }
+  body.home section:first-of-type { border-top: 0; }
+}

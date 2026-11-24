@@ -575,7 +575,11 @@
     return out;
   }
 
-  function finished() { return [el('h2', { text: 'Game over' }), scoreboard()]; }
+  function finished() {
+    const sb = scoreboard();
+    sb.classList.remove('side'); // nothing else on screen: keep the final scores in the main column
+    return [el('h2', { text: 'Game over' }), sb, el('a', { class: 'btn secondary', href: '/', text: 'Home page' })];
+  }
 
   const phases = { lobby, review, between, playing, reveal, finished };
   function devBanner() {
