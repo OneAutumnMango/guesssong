@@ -1083,3 +1083,8 @@ test('top-track settings reach fetchPool', async () => {
     await t.close();
   }
 });
+
+test('favicon is linked from both pages and served as svg', () => {
+  for (const f of ['index.html', 'play.html']) assert.match(readFileSync(new URL('../public/' + f, import.meta.url), 'utf8'), /<link rel="icon" href="favicon\.svg"/);
+  assert.match(readFileSync(new URL('../public/favicon.svg', import.meta.url), 'utf8'), /^<svg /);
+});
