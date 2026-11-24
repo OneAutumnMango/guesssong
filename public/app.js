@@ -442,6 +442,12 @@
   function playCard() {
     const starting = playClicked && !fallback && !playSent;
     const b = btn('', () => {
+      if (starting) { // sound is on its way but the embed has not reported it yet: let the host cancel instead of waiting
+        playClicked = false; clearInterval(watchTimer);
+        try { controller.pause(); } catch (e) { /* ignore */ }
+        render();
+        return;
+      }
       if (apiFailed || !controller) { showError('The Spotify player is not ready yet.'); return; }
       // same user gesture: start audio here; the round starts when the embed reports sound
       playClicked = true; fallback = false; playSent = false; slowLoad = false; clickAt = performance.now();
@@ -449,8 +455,8 @@
       startWatch();
       render();
     }, 'icon-btn', 'Play');
-    setIcon(b, 'play', 'Play');
-    b.disabled = starting || apiFailed;
+    setIcon(b, starting ? 'pause' : 'play', starting ? 'Pause' : 'Play');
+    b.disabled = apiFailed;
     const seek = el('input', { id: 'between-seek', type: 'range', min: 0, max: 1, step: 1, value: 0, disabled: true, 'aria-label': 'Seek' });
     const msg = apiFailed ? 'The Spotify player failed to load, so audio cannot start. Reload the page or check for an ad blocker.'
       : starting ? 'Starting audio…'
