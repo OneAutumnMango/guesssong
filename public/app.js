@@ -322,10 +322,11 @@
         el('span', { class: 'muted', text: p.connected ? '' : 'offline' }))))];
   }
 
+  const RANGES = { short_term: 'last 4 weeks', medium_term: 'last 6 months', long_term: 'all time' };
   const bufMax = (p) => (Number.isInteger(p) && p >= 1 ? Math.min(20, p - 1) : 20);
   const settingsSummary = () => {
     const s = view.settings;
-    return 'Settings: ' + (s.source === 'liked' ? 'liked songs' : 'recently played') + ', ' + s.perPerson + ' songs each, ' +
+    return 'Settings: ' + (s.source === 'top' ? 'top ' + s.topLimit + ' tracks (' + RANGES[s.topRange] + ')' : s.source === 'liked' ? 'liked songs' : 'recently played') + ', ' + s.perPerson + ' songs each, ' +
       s.buffer + ' removals each, ' + (s.timer === false ? 'no timer' : '20 s timer') + (s.hostPlays ? ', host plays' : ', host only hosts');
   };
 
@@ -345,8 +346,16 @@
     }
     if (isHost()) {
       const s = view.settings;
-      const source = el('select', { id: 'f-source' }, el('option', { value: 'recents', text: 'Recently played' }), el('option', { value: 'liked', text: 'Liked songs' }));
+      const source = el('select', { id: 'f-source' }, el('option', { value: 'top', text: 'Top tracks' }), el('option', { value: 'recents', text: 'Recently played' }), el('option', { value: 'liked', text: 'Liked songs' }));
       source.value = s.source;
+      const opts = (o, fmt) => Object.keys(o).map((v) => el('option', { value: v, text: fmt(v) }));
+      const range = el('select', { id: 'f-range' }, ...opts(RANGES, (v) => RANGES[v]));
+      range.value = s.topRange;
+      const lim = el('select', { id: 'f-toplimit' }, ...[10, 25, 50].map((n) => el('option', { value: String(n), text: 'Top ' + n })));
+      lim.value = String(s.topLimit);
+      const topRow = el('div', { id: 'top-opts' }, el('label', { htmlFor: 'f-range', text: 'Time range' }), range, el('label', { htmlFor: 'f-toplimit', text: 'Pull from' }), lim);
+      topRow.hidden = s.source !== 'top';
+      source.addEventListener('change', () => { topRow.hidden = source.value !== 'top'; });
       const per = el('input', { id: 'f-per', type: 'number', min: 1, max: 25, step: 1, required: true, value: s.perPerson });
       const buffer = el('input', { id: 'f-buffer', type: 'number', min: 0, max: bufMax(s.perPerson), step: 1, required: true, value: s.buffer });
       // lowering songs per person clamps removals to the new max so both can still be sent
@@ -363,12 +372,12 @@
         if (!per.checkValidity() || !buffer.checkValidity()) { showError('Songs per person 1-25, removals 0 to songs-1'); return false; }
         showError('');
         send({ type: 'settings', settings: {
-          source: source.value, perPerson: Number(per.value), buffer: Number(buffer.value), timer: !nt.checked, hostPlays: hp.checked } });
+          source: source.value, topRange: range.value, topLimit: Number(lim.value), perPerson: Number(per.value), buffer: Number(buffer.value), timer: !nt.checked, hostPlays: hp.checked } });
         return true;
       };
-      for (const i of [source, per, buffer, nt, hp]) i.addEventListener('change', push);
+      for (const i of [source, range, lim, per, buffer, nt, hp]) i.addEventListener('change', push);
       out.push(el('section', { id: 'lobby-settings' }, el('h2', { text: 'Settings' }),
-        el('label', { htmlFor: 'f-source', text: 'Song source' }), source,
+        el('label', { htmlFor: 'f-source', text: 'Song source' }), source, topRow,
         el('label', { htmlFor: 'f-per', text: 'Songs per person' }), per,
         el('label', { htmlFor: 'f-buffer', text: 'Removals each' }), buffer,
         el('p', { class: 'muted', text: 'Everyone ends up with (songs per person - removals) songs in the game; if you do not remove enough, random ones are dropped.' }),

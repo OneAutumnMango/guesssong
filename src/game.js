@@ -9,7 +9,7 @@ export class Game {
     this.rng = rng;
     this.durationMs = durationMs;
     this.phase = 'lobby';
-    this.settings = { source: 'recents', perPerson: 4, buffer: 1, hostPlays: true, timer: true };
+    this.settings = { source: 'top', topRange: 'short_term', topLimit: 50, perPerson: 4, buffer: 1, hostPlays: true, timer: true };
     this.hostId = null;
     this.deadline = null;
     this.players = new Map(); // id -> { id, name, connected, score }
@@ -47,7 +47,9 @@ export class Game {
   configure(s) {
     if (this.phase !== 'lobby') throw new Error('Settings are locked');
     const ok = {
-      source: (v) => v === 'recents' || v === 'liked',
+      source: (v) => v === 'top' || v === 'recents' || v === 'liked',
+      topRange: (v) => ['short_term', 'medium_term', 'long_term'].includes(v),
+      topLimit: (v) => v === 10 || v === 25 || v === 50,
       perPerson: (v) => Number.isInteger(v) && v >= 1 && v <= 25,
       buffer: (v) => Number.isInteger(v) && v >= 0 && v <= 20,
       hostPlays: (v) => typeof v === 'boolean',

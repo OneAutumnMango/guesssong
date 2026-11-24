@@ -1,6 +1,6 @@
 import { randomBytes, createHash } from 'node:crypto';
 
-const SCOPE = 'user-library-read user-read-recently-played';
+const SCOPE = 'user-library-read user-read-recently-played user-top-read';
 const API = 'https://api.spotify.com/v1';
 
 export class SpotifyError extends Error {
@@ -66,7 +66,11 @@ const toTracks = (items) => {
   return [...seen.values()];
 };
 
-export async function fetchPool(token, source, fetchFn = fetch, rng = Math.random) {
+export async function fetchPool(token, source, fetchFn = fetch, rng = Math.random, { topRange = 'short_term', topLimit = 50 } = {}) {
+  if (source === 'top') {
+    const { items } = await get(token, `/me/top/tracks?time_range=${topRange}&limit=${topLimit}`, fetchFn);
+    return toTracks((items ?? []).map((track) => ({ track })));
+  }
   if (source === 'recents') {
     return toTracks((await get(token, '/me/player/recently-played?limit=50', fetchFn)).items);
   }

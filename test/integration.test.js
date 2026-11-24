@@ -962,7 +962,7 @@ test('default settings: review view carries keep/removalsLeft and players carry 
     const { hc } = await pair(t);
     hc.send({ type: 'start' });
     const v = (await hc.phase('review')).view;
-    assert.deepEqual(v.settings, { source: 'recents', perPerson: 4, buffer: 1, hostPlays: true, timer: true });
+    assert.deepEqual(v.settings, { source: 'top', topRange: 'short_term', topLimit: 50, perPerson: 4, buffer: 1, hostPlays: true, timer: true });
     assert.equal(v.myTracks.length, 4);
     assert.equal(v.keep, 3);
     assert.equal(v.removalsLeft, 1);
@@ -1060,6 +1060,25 @@ test('dev: untimed round with only test players still ends', async () => {
     await hc.phase('between');
     hc.send({ type: 'play' });
     await hc.until((m) => m.type === 'state' && m.view.phase === 'reveal', 2500);
+  } finally {
+    await t.close();
+  }
+});
+
+test('top-track settings reach fetchPool', async () => {
+  const seen = [];
+  const sp = { ...spotify, fetchPool: async (token, src, f, r, opts) => { seen.push([src, opts.topRange, opts.topLimit]); return spotify.fetchPool(token); } };
+  const t = await boot(300, { spotify: sp });
+  try {
+    const h = await t.login('new', 'H');
+    const hc = await t.connect(h.key);
+    const code = (await hc.until((m) => m.type === 'state')).view.code;
+    await t.connect((await t.login(code, 'J')).key);
+    hc.send({ type: 'settings', settings: { source: 'top', topRange: 'long_term', topLimit: 25 } });
+    hc.send({ type: 'start' });
+    await hc.phase('review');
+    assert.ok(seen.length >= 2);
+    for (const s of seen) assert.deepEqual(s, ['top', 'long_term', 25]);
   } finally {
     await t.close();
   }

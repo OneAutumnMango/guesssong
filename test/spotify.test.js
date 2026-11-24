@@ -17,7 +17,7 @@ test('authUrl', () => {
   const p = new URL(u).searchParams;
   assert.equal(p.get('code_challenge_method'), 'S256');
   assert.equal(p.get('state'), 'st4te');
-  assert.equal(p.get('scope'), 'user-library-read user-read-recently-played');
+  assert.equal(p.get('scope'), 'user-library-read user-read-recently-played user-top-read');
   assert.equal(p.get('client_id'), 'c');
 });
 
@@ -37,6 +37,16 @@ test('exchangeCode', async () => {
 test('fetchProfile', async () => {
   assert.deepEqual(await fetchProfile('t', async () => res(200, { id: 'i', display_name: 'D' })), { id: 'i', name: 'D' });
   assert.deepEqual(await fetchProfile('t', async () => res(200, { id: 'i', display_name: null })), { id: 'i', name: 'i' });
+});
+
+test('fetchPool top', async () => {
+  const urls = [];
+  const f = async (url) => { urls.push(url); return res(200, { items: [item('1').track, item('2').track, item('1').track] }); };
+  const pool = await fetchPool('t', 'top', f);
+  assert.match(urls[0], /\/v1\/me\/top\/tracks\?time_range=short_term&limit=50$/);
+  assert.deepEqual(pool.map((t) => t.id), ['1', '2']);
+  await fetchPool('t', 'top', f, Math.random, { topRange: 'long_term', topLimit: 10 });
+  assert.match(urls[1], /time_range=long_term&limit=10$/);
 });
 
 test('fetchPool recents', async () => {

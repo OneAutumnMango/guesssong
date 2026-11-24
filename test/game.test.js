@@ -188,8 +188,14 @@ test('configure validates input atomically', () => {
     assert.throws(() => g.configure(bad), Error, JSON.stringify(bad));
     assert.equal(JSON.stringify(g.settings), before);
   }
+  g.configure({ source: 'top', topRange: 'medium_term', topLimit: 25 });
+  assert.equal(g.settings.topRange, 'medium_term');
+  assert.equal(g.settings.topLimit, 25);
+  assert.throws(() => g.configure({ topRange: 'x' }), Error);
+  assert.throws(() => g.configure({ topLimit: 7 }), Error);
+  g.configure({ topRange: 'short_term', topLimit: 50 });
   g.configure({ perPerson: 10, buffer: 0, hostPlays: false, source: 'liked', evil: 1, total: 99 });
-  assert.deepEqual(g.settings, { source: 'liked', perPerson: 10, buffer: 0, hostPlays: false, timer: true });
+  assert.deepEqual(g.settings, { source: 'liked', topRange: 'short_term', topLimit: 50, perPerson: 10, buffer: 0, hostPlays: false, timer: true });
   g.configure({ buffer: 3 });
   g.configure({ perPerson: 2, buffer: 1 }); // valid together although the old buffer was 3
   assert.deepEqual([g.settings.perPerson, g.settings.buffer], [2, 1]);

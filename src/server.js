@@ -124,7 +124,7 @@ export function createServer({ clientId, publicUrl: rawPublicUrl, spotify = real
       };
       const results = await Promise.allSettled(fetchIds.map((id) => {
         const e = [...room.players.values()].find((x) => x.id === id);
-        return withTimeout(Promise.resolve().then(() => spotify.fetchPool(e?.token, game.settings.source)));
+        return withTimeout(Promise.resolve().then(() => spotify.fetchPool(e?.token, game.settings.source, undefined, undefined, game.settings)));
       }));
       const pools = {};
       let hostPool;
